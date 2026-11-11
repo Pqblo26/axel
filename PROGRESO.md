@@ -6,7 +6,7 @@ _Última actualización: 2026-11-11_
 
 ## Estado actual
 
-Fase 3–4 (redirigir el cliente y servidor mínimo): el servidor está preparado para montarse en el PC de Pablo (Windows + WSL2 + MuMu), falta la primera prueba con el juego real.
+Fase 3–4 (redirigir el cliente y servidor mínimo). En el PC de Pablo ya están `.wslconfig` (red en espejo), el APK stub instalado en MuMu y su disco de sistema escribible. WSL está instalado pero pendiente de un "Actualizar y reiniciar" de Windows; después falta ejecutar `setup-wsl.sh`, poner el certificado y el hosts en MuMu y la primera prueba con el juego real.
 
 ## Qué funciona (heredado de Axel)
 
@@ -17,13 +17,13 @@ Fase 3–4 (redirigir el cliente y servidor mínimo): el servidor está preparad
 
 ## Qué hemos añadido
 
-- **Gacha con probabilidades reales** (rama `gacha-probabilidades-reales`): las tiradas usan `gacha.rates`; la 10.ª de una multi usa la tabla de garantía. Corregido el fallo de `gacha_rate` con `bonus_rates`.
+- **Gacha con probabilidades reales** (rama `gacha-probabilidades-reales`): las tiradas usan `gacha.rates`; la 10.ª de una multi usa la tabla de garantía. Corregido el fallo de `gacha_rate` con `bonus_rates`. Historial de tiradas real (`gacha.user_draws`, endpoint `gachalog`).
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
 ## Qué falta
 
 - Primera prueba real en MuMu (red, certificado, carga de recursos).
-- El gacha no cobra gemas/tickets (`money_type` se ignora) ni guarda historial (`gacha_log` es un ejemplo fijo).
+- El gacha no cobra gemas/tickets (`money_type` se ignora).
 - Los banners están escritos a mano en `gacha_info()` (`src/api/gacha.rs`); hay que pasarlos a la base de datos para poder editarlos.
 - Endpoints todavía en stub (~100 avisos `encountered stub` en el código): sorteo de eventos, compras que fallan por el cliente, vincular cuenta, etc.
 - El progreso del menú principal no se guarda.
