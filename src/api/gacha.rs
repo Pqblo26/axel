@@ -1403,6 +1403,27 @@ async fn gacha_impl(
     }
   }
 
+  #[rustfmt::skip]
+  let log_statement = transaction
+    .prepare(/* language=postgresql */ r#"
+      insert into gacha.user_draws (user_id, gacha_id, item_type, item_id, item_num)
+      values ($1, $2, $3, $4, 1)
+    "#)
+    .await
+    .context("failed to prepare statement")
+    .unwrap();
+  let member_item_type: i32 = RemoteDataItemType::Member.into();
+  for member in &members {
+    transaction
+      .execute(
+        &log_statement,
+        &[&session.user_id, &(gacha_id as i64), &member_item_type, &(member.id as i64)],
+      )
+      .await
+      .context("failed to log gacha draw")
+      .unwrap();
+  }
+
   transaction.commit().await.unwrap();
 
   // Fixed very old bug back from commit [baa1fae0],
@@ -1725,10 +1746,38 @@ pub struct GachaRateBonusItem {
 
 impl CallCustom for GachaRate {}
 
-pub async fn gacha_log() -> impl IntoHandlerResponse {
-  Unsigned(json!({
-    "goods":[{"itemtype":4,"itemid":1063113,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1034100,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1152102,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1083110,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1122100,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1093100,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1132100,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1002102,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1282100,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1064217,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1192102,"itemnum":1,"time":"2024-08-05 20:17:42","gachaid":200021},{"itemtype":4,"itemid":1102102,"itemnum":1,"time":"2024-08-05 20:17:42","gachaid":200021},{"itemtype":4,"itemid":1143127,"itemnum":1,"time":"2024-08-05 20:17:42","gachaid":200021},{"itemtype":4,"itemid":1162100,"itemnum":1,"time":"2024-08-05 20:17:42","gachaid":200021},{"itemtype":4,"itemid":1192102,"itemnum":1,"time":"2024-08-05 20:17:42","gachaid":200021},{"itemtype":4,"itemid":1012100,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1013100,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012100,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1013116,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012102,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012102,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012102,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012100,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012102,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1013116,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535}],"status":0,"time":1723059245,"remotedata":[],"notificationdata":[]
-  }))
+/// Draw history shown in the gacha menu. The client shows the most recent entries.
+pub async fn gacha_log(state: Arc<AppState>, session: Arc<Session>) -> impl IntoHandlerResponse {
+  let client = state.get_database_client().await?;
+  #[rustfmt::skip]
+  let statement = client
+    .prepare(/* language=postgresql */ r#"
+      select gacha_id, item_type, item_id, item_num,
+             to_char(drawn_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS') as time
+      from gacha.user_draws
+      where user_id = $1
+      order by drawn_at desc, id desc
+      limit 100
+    "#)
+    .await
+    .context("failed to prepare statement")?;
+  let rows = client
+    .query(&statement, &[&session.user_id])
+    .await
+    .context("failed to execute query")?;
+
+  let goods = rows
+    .into_iter()
+    .map(|row| GachaLogItem {
+      item_type: row.get("item_type"),
+      item_id: row.get("item_id"),
+      item_num: row.get("item_num"),
+      time: row.get("time"),
+      gacha_id: row.get::<_, i64>("gacha_id") as i32,
+    })
+    .collect();
+
+  Ok(Unsigned(GachaAssistLog { goods }))
 }
 
 /// One row of `gacha.rates`, reduced to what is needed to perform a draw.
