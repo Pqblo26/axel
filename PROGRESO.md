@@ -57,6 +57,10 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
   - Free Quest: solo salen las zonas fijas y las del día de la semana (hora de Japón), con sus intentos diarios. Las zonas de eventos antiguos (las de nombre en japonés) ya no aparecen.
   - Miembros desde regalos, canjes, packs y coronas (`src/user/grant.rs`), con su personaje y habilidades.
   - `scripts/konofan/reiniciar-cuenta.sh`: devuelve una cuenta al estado de después del tutorial.
+- **Séptima tanda: Dungeons y Battle Arena** (2026-11-12):
+  - Dungeons reales (`user_dungeon_runs`, `user_dungeon_clears`): solo sale la mazmorra de evento de la semana (rota cada jueves a medianoche UTC), con sus 3 zonas desbloqueadas en orden (`unlock_id`). Cada zona tiene 5 pisos con los enemigos y la vida de `battle_wave`/`battle_enemy`; la vida de tu equipo y la de los enemigos se guarda entre pisos y entre intentos. Bendiciones reales (3 a elegir, re-sorteo, curar y revivir). Al ganar el último piso se da el rango (3 = sin bajas, según `dungeon_clear_rank`) y sus recompensas; con la zona superada se puede saltar con tickets. Las mazmorras normales (11–14) no salen porque no tienen imágenes en el cliente.
+  - Battle Arena real (`user_score_challenge_best`): 3 intentos al día (hora de Japón) compartidos entre Normal, Hard y Very Hard; la práctica no gasta. Se guarda la mejor puntuación de cada modo; la total suma las tres y sale en el ranking (solo tú). Cada combate da 10 Arena Medals y cada umbral de puntuación total su recompensa una vez (`scorechallenge_reward_achievement`). Sin intentos, el combate cuenta como práctica.
+  - El jefe de la Arena no muere a propósito: la puntuación es el daño hecho en el tiempo límite.
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
 ## Qué falta
@@ -65,7 +69,8 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
 - Armas y accesorios no se pueden dar desde regalos ni canjes todavía.
 - Sin comprobar en el juego: que el cliente acepte rango y experiencia absolutos tras el combate (se mandan como las monedas) y que las fases bloqueadas se oculten bien.
 - Fame Potions: se pueden comprar, pero `use_supplement_num` al empezar una Fame Quest todavía no las gasta.
-- Boss de evento: falta dar medallas (los maestros no dicen cuántas) e intentos limitados por día (`limit`, Challenges, Battle Arena).
+- Boss de evento: falta dar medallas (los maestros no dicen cuántas) e intentos limitados por día (`limit`, Challenges).
+- Battle Arena EX: sin implementar («Not available»). Los retos de mazmorra (`DungeonChallenge`) se compran pero aún no se gastan.
 - El gacha no cobra gemas/tickets (`money_type` se ignora).
 - Los banners están escritos a mano en `gacha_info()` (`src/api/gacha.rs`); hay que pasarlos a la base de datos para poder editarlos.
 - Endpoints todavía en stub (~100 avisos `encountered stub` en el código): sorteo de eventos, compras que fallan por el cliente, vincular cuenta, etc.
