@@ -8,7 +8,11 @@ use tracing::warn;
 
 use crate::api::master_all::{get_master_manager, get_masters};
 use crate::api::{battle, ApiRequest, NotificationData};
-use crate::api::battle::{apply_reward_multiplier, grant_rewards, make_battle_member_exp_and_character_love, AutoProgressionResultResponse, BattleResultResponse};
+use crate::api::battle::{
+  apply_reward_multiplier, grant_rewards, make_battle_member_exp_and_character_love, pay_quest_money,
+  AutoProgressionResultResponse, BattleResultResponse,
+};
+use crate::api::quest::stage::stage_info;
 use crate::api::quest::parse_reward_items;
 use crate::api::quest::quest_hunting::BattleReward;
 use crate::call::{CallCustom, CallResponse};
@@ -308,9 +312,10 @@ pub async fn marathon_stage_list(
     .map(|quest| MarathonStageQuest {
       quest_id: quest.get("id").unwrap().as_str().unwrap().parse::<i32>().unwrap(),
       status: 3,
-      task1: 0,
-      task2: 0,
-      task3: 0,
+      // Missions done: all three crowns gold, which is also what lets the stage be skipped
+      task1: 1,
+      task2: 1,
+      task3: 1,
       hardnum: 0,
     })
     .collect::<Vec<_>>();
@@ -332,7 +337,7 @@ pub async fn marathon_quest_start(
   let auto_progression_info: Value = serde_json::from_str(&request.body["auto_progression_info"])?;
   let event_id: Value = serde_json::from_str(&request.body["event_id"])?;
 
-  Ok(battle::make_battle_start(&state, &session, party_no).await)
+  Ok(battle::make_battle_start(&state, &session, party_no, Some((quest_id, 1))).await)
 }
 
 // See [Wonder_Api_MarathonQuestResultRequest_Fields]
@@ -357,27 +362,25 @@ pub async fn marathon_quest_result(
   let mut client = state.get_database_client().await?;
   let transaction = client.transaction().await.context("failed to start transaction")?;
 
-  let rewards = get_master_manager()
-    .get_master("event_quest_stage_itemreward")
-    .iter()
-    .map(|reward| (reward["id"].as_str().unwrap().parse::<i32>().unwrap(), reward))
-    .collect::<HashMap<_, _>>();
-  let mut rewards = parse_reward_items(rewards[&params.quest_id]);
+  let stage = stage_info(params.quest_id).context("unknown event quest stage")?;
+  let mut rewards = stage.rewards.clone();
   apply_reward_multiplier(&transaction, &session, &mut rewards).await?;
   let update_items = grant_rewards(&transaction, &session, &rewards).await?;
   transaction.commit().await.context("failed to commit transaction")?;
+  let wallet_remote = pay_quest_money(&client, &session, stage.money as i64).await?;
 
   let party = FetchUserParty::new(&client)
     .await?
     .run(session.user_id, params.party_id as i64)
     .await?;
 
-  let (member_exp, love) = make_battle_member_exp_and_character_love(&party, &client, &session).await?;
+  let (member_exp, love) =
+    make_battle_member_exp_and_character_love(&party, &client, &session, stage.intimacy_exp).await?;
   let mut response = CallResponse::new_success(Box::new(BattleResultResponse {
     limit: 0,
-    exp: 5,
+    exp: stage.player_exp,
     lvup: 0,
-    money: 85000,
+    money: stage.money,
     storyunlock: vec![],
     love,
     member_exp,
@@ -403,6 +406,7 @@ pub async fn marathon_quest_result(
     firstclear: true,
   }));
   response.remote.extend(update_items);
+  response.remote.extend(wallet_remote);
   // TODO: Send remote data to actually update characters stats
   response.add_notifications(vec![
     NotificationData::new(1, 16, 1, 0, "".to_string(), "".to_string()),

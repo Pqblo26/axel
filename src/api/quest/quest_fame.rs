@@ -5,13 +5,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use anyhow::Context;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::api::battle_multi::{BattleCharacterLove, BattleMemberExp};
 use crate::api::master_all::{get_master_manager, get_masters};
 use crate::api::quest::quest_hunting::{BattleReward};
 use crate::api::{battle, ApiRequest, SkillPaFameAddStatus};
-use crate::api::battle::{apply_reward_multiplier, grant_rewards, make_battle_member_exp_and_character_love};
+use crate::api::battle::{
+  apply_reward_multiplier, grant_rewards, make_battle_member_exp_and_character_love, pay_quest_money,
+};
+use crate::api::quest::stage::stage_info;
 use crate::api::quest::parse_reward_items;
 use crate::call::{CallCustom, CallResponse};
 use crate::extractor::Params;
@@ -209,7 +212,11 @@ pub async fn fame_quest_start(
   let stage_id: i32 = request.body["stage_id"].parse().unwrap();
   let cost_ratio: i32 = request.body["cost_ratio"].parse().unwrap();
 
-  battle::make_battle_start(&state, &session, party_no).await
+  if use_supplement_num > 0 {
+    // TODO: Fame Potions (supplements) are not taken yet
+    warn!(?use_supplement_num, "fame quest started with supplements");
+  }
+  battle::make_battle_start(&state, &session, party_no, Some((stage_id, cost_ratio))).await
 }
 
 // See [Wonder_Api_FameQuestResultResponseDto_Fields]
@@ -277,27 +284,25 @@ pub async fn fame_quest_result(
   let mut client = state.get_database_client().await?;
   let transaction = client.transaction().await.context("failed to start transaction")?;
 
-  let rewards = get_master_manager()
-    .get_master("fame_quest_stage_itemreward")
-    .iter()
-    .map(|reward| (reward["fame_quest_id"].as_str().unwrap().parse::<i32>().unwrap(), reward))
-    .collect::<HashMap<_, _>>();
-  let mut rewards = parse_reward_items(rewards[&params.stage_id]);
+  let stage = stage_info(params.stage_id).context("unknown fame quest stage")?;
+  let mut rewards = stage.rewards.clone();
   apply_reward_multiplier(&transaction, &session, &mut rewards).await?;
   let update_items = grant_rewards(&transaction, &session, &rewards).await?;
   transaction.commit().await.context("failed to commit transaction")?;
+  let wallet_remote = pay_quest_money(&client, &session, stage.money as i64).await?;
 
   let party = FetchUserParty::new(&client)
     .await?
     .run(session.user_id, params.party_id as i64)
     .await?;
 
-  let (member_exp, love) = make_battle_member_exp_and_character_love(&party, &client, &session).await?;
+  let (member_exp, love) =
+    make_battle_member_exp_and_character_love(&party, &client, &session, stage.intimacy_exp).await?;
   let mut response = CallResponse::new_success(Box::new(FameQuestResultResponse {
     fame_rank_up: 1,
-    exp: 230,
+    exp: stage.player_exp,
     lvup: 0,
-    money: 42000,
+    money: stage.money,
     love,
     // TODO: We must send only members that are used in the party, otherwise hardlock occurs??
     member_exp,
@@ -314,5 +319,6 @@ pub async fn fame_quest_result(
     lottery_potion_list: vec![],
   }));
   response.remote.extend(update_items);
+  response.remote.extend(wallet_remote);
   Ok(Unsigned(response))
 }

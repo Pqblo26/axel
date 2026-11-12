@@ -2,6 +2,7 @@ use crate::api::battle_multi::{BattleCharacterLove, BattleClearReward, BattleMem
 use crate::api::master_all::get_master_manager;
 use crate::api::party_info::{Party, PartyForm, PartyPassiveSkillInfo, SpecialSkillInfo};
 use crate::api::quest::quest_hunting::BattleReward;
+use crate::api::quest::stage::stage_info;
 use crate::api::quest::{parse_reward_items, QuestRewardItem};
 use crate::api::surprise::BasicBattlePartyForm;
 use crate::api::{ApiRequest, MemberFameStats, NotificationData, RemoteData, RemoteDataItemType};
@@ -17,6 +18,7 @@ use crate::member::{
 use crate::notification::{IntoNotificationData, MissionDone};
 use crate::user::overrides::FetchUserOverrides;
 use crate::user::session::Session;
+use crate::user::wallet::Wallet;
 use crate::AppState;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -101,11 +103,58 @@ pub struct AutoProgressionInfo {
   pub incomplete_setting: i32,
 }
 
-pub async fn make_battle_start(state: &AppState, session: &Session, party_id: i32) -> impl IntoHandlerResponse + use<> {
+/// Takes the stamina a quest costs (times [ratio]) from the wallet.
+/// The client checks stamina before starting, so if the server has less (out of sync) it takes
+/// what there is instead of failing the battle.
+pub async fn pay_quest_stamina(
+  client: &deadpool_postgres::Client,
+  session: &Session,
+  quest_id: i32,
+  ratio: i32,
+) -> anyhow::Result<Vec<RemoteData>> {
+  let Some(stage) = stage_info(quest_id) else {
+    warn!(?quest_id, "unknown quest stage, no stamina taken");
+    return Ok(Vec::new());
+  };
+  let cost = stage.stamina as i64 * ratio.max(1) as i64;
+  let mut wallet = Wallet::load(client, session.user_id).await?;
+  if (wallet.stamina as i64) < cost {
+    warn!(?quest_id, ?cost, stamina = wallet.stamina, "not enough stamina on the server, taking what there is");
+  }
+  let taken = cost.min(wallet.stamina as i64);
+  wallet.add(RemoteDataItemType::Stamina, -taken)?;
+  wallet.save(client, session.user_id).await?;
+  info!(?quest_id, ?cost, stamina = wallet.stamina, "stamina spent");
+  Ok(wallet.to_remote_data())
+}
+
+/// Adds the eris earned in a quest. Returns remote data with the new wallet.
+pub async fn pay_quest_money(
+  client: &deadpool_postgres::Client,
+  session: &Session,
+  money: i64,
+) -> anyhow::Result<Vec<RemoteData>> {
+  let mut wallet = Wallet::load(client, session.user_id).await?;
+  wallet.add(RemoteDataItemType::Money, money)?;
+  wallet.save(client, session.user_id).await?;
+  Ok(wallet.to_remote_data())
+}
+
+/// [stamina]: quest id and stamina multiplier to charge, if the battle costs stamina.
+pub async fn make_battle_start(
+  state: &AppState,
+  session: &Session,
+  party_id: i32,
+  stamina: Option<(i32, i32)>,
+) -> impl IntoHandlerResponse + use<> {
   let client = state
     .get_database_client()
     .await
     .context("failed to get database connection")?;
+  let stamina_remote = match stamina {
+    Some((quest_id, ratio)) => pay_quest_stamina(&client, session, quest_id, ratio).await?,
+    None => Vec::new(),
+  };
   let party = FetchUserParty::new(&client)
     .await?
     .run(session.user_id, party_id as i64)
@@ -133,7 +182,7 @@ pub async fn make_battle_start(state: &AppState, session: &Session, party_id: i3
       })
       .collect(),
   }));
-  response.add_notifications(vec![NotificationData::new(1, 7, 6, 0, "".to_string(), "".to_string())]);
+  response.remote.extend(stamina_remote);
   Ok(Unsigned(response))
 }
 
@@ -145,7 +194,7 @@ pub async fn battle_start(
   session: Arc<Session>,
   Params(params): Params<BattleStartRequest>,
 ) -> impl IntoHandlerResponse {
-  make_battle_start(&state, &session, params.party_id).await
+  make_battle_start(&state, &session, params.party_id, Some((params.quest_id, 1))).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -327,10 +376,12 @@ pub async fn apply_reward_multiplier(
   Ok(())
 }
 
+/// [intimacy_gain]: affinity each character in the party earns (saved to the database).
 pub async fn make_battle_member_exp_and_character_love(
   party: &Party,
   client: &deadpool_postgres::Client,
   session: &Session,
+  intimacy_gain: i32,
 ) -> anyhow::Result<(Vec<BattleMemberExp>, Vec<BattleCharacterLove>)> {
   // We must send only members that are used in the party, otherwise hardlock occurs
   #[rustfmt::skip]
@@ -362,19 +413,21 @@ pub async fn make_battle_member_exp_and_character_love(
     .flatten()
     .collect::<Vec<_>>();
   let characters = {
+    let mut character_ids = characters.clone();
+    character_ids.sort_unstable();
+    character_ids.dedup();
     #[rustfmt::skip]
     let statement = client
       .prepare(/* language=postgresql */ r#"
-        select
-          character_id,
-          intimacy
-        from user_characters
-        where user_id = $1
+        update user_characters
+        set intimacy = intimacy + $3
+        where user_id = $1 and character_id = any($2)
+        returning character_id, intimacy
       "#)
       .await
       .context("failed to prepare statement")?;
     let rows = client
-      .query(&statement, &[&session.user_id])
+      .query(&statement, &[&session.user_id, &character_ids, &intimacy_gain.max(0)])
       .await
       .context("failed to execute query")?;
     rows
@@ -400,7 +453,7 @@ pub async fn make_battle_member_exp_and_character_love(
     .iter()
     .map(|(character_id, intimacy)| BattleCharacterLove {
       character_id: *character_id,
-      love: *intimacy + 10,
+      love: *intimacy,
     })
     .collect();
   Ok((member_exp, character_love))
@@ -414,27 +467,25 @@ pub async fn battle_result(
   let mut client = state.get_database_client().await?;
   let transaction = client.transaction().await.context("failed to start transaction")?;
 
-  let rewards = get_master_manager()
-    .get_master("mainquest_stage_itemreward")
-    .iter()
-    .map(|reward| (reward["id"].as_str().unwrap().parse::<i32>().unwrap(), reward))
-    .collect::<HashMap<_, _>>();
-  let mut rewards = parse_reward_items(rewards[&params.quest_id]);
+  let stage = stage_info(params.quest_id).context("unknown main quest stage")?;
+  let mut rewards = stage.rewards.clone();
   apply_reward_multiplier(&transaction, &session, &mut rewards).await?;
   let update_items = grant_rewards(&transaction, &session, &rewards).await?;
   transaction.commit().await.context("failed to commit transaction")?;
+  let wallet_remote = pay_quest_money(&client, &session, stage.money as i64).await?;
 
   let party = FetchUserParty::new(&client)
     .await?
     .run(session.user_id, params.party_id as i64)
     .await?;
 
-  let (member_exp, love) = make_battle_member_exp_and_character_love(&party, &client, &session).await?;
+  let (member_exp, love) =
+    make_battle_member_exp_and_character_love(&party, &client, &session, stage.intimacy_exp).await?;
   let mut response = CallResponse::new_success(Box::new(BattleResultResponse {
     limit: 0,
-    exp: 5,
+    exp: stage.player_exp,
     lvup: 0,
-    money: 85000,
+    money: stage.money,
     storyunlock: vec![],
     love,
     member_exp,
@@ -460,6 +511,7 @@ pub async fn battle_result(
     firstclear: true,
   }));
   response.remote.extend(update_items);
+  response.remote.extend(wallet_remote);
   // TODO: Send remote data to actually update characters stats
   response.add_notifications(vec![
     NotificationData::new(1, 16, 1, 0, "".to_string(), "".to_string()),
@@ -512,9 +564,8 @@ pub async fn marathon_single_start(
   session: Arc<Session>,
   Params(params): Params<MarathonSingleStartRequest>,
 ) -> impl IntoHandlerResponse {
-  warn!(?params, "stub encountered: marathon_single_start");
-
-  let client = state.pool.get().await.context("failed to get database connection")?;
+  let mut client = state.pool.get().await.context("failed to get database connection")?;
+  let ticket_remote = pay_boss_tickets(&mut client, &session, &params).await?;
 
   let party = FetchUserParty::new(&client)
     .await?
@@ -532,7 +583,7 @@ pub async fn marathon_single_start(
     .run(session.user_id, &mut members.iter_mut().collect::<Vec<_>>())
     .await?;
 
-  Ok(Unsigned(MarathonSingleStartResponse {
+  let mut response = CallResponse::new_success(Box::new(MarathonSingleStartResponse {
     chest: "10101111,10101120,10101131".to_string(),
     party: party.to_battle_party(),
     // We must send only members that are used in the party, otherwise hardlock occurs?
@@ -544,7 +595,54 @@ pub async fn marathon_single_start(
       })
       .collect(),
     get_log: true,
-  }))
+  }));
+  response.remote.extend(ticket_remote);
+  Ok(Unsigned(response))
+}
+
+/// Takes the boss tickets an event boss costs: the stage's "bossticket" times the multiplier the
+/// player chose, of the event's ticket item. Like stamina, the client checks first, so a shortage
+/// on the server only takes what there is.
+async fn pay_boss_tickets(
+  client: &mut deadpool_postgres::Client,
+  session: &Session,
+  params: &MarathonSingleStartRequest,
+) -> anyhow::Result<Vec<RemoteData>> {
+  let masters = get_master_manager();
+  let cost = masters
+    .get_master("event_marathon_quest_stage_boss_single")
+    .iter()
+    .find(|row| row["id"].as_str() == Some(&params.quest_id.to_string()))
+    .and_then(|row| row["bossticket"].as_str()?.parse::<i32>().ok())
+    .unwrap_or(0)
+    * params.ticket_ratio.max(1);
+  let ticket_id = masters
+    .get_master("event_config")
+    .iter()
+    .find(|row| row["event_id"].as_str() == Some(&params.event_id.to_string()))
+    .and_then(|row| row["boss_ticket_id"].as_str()?.parse::<i64>().ok());
+  let Some(ticket_id) = ticket_id.filter(|_| cost > 0) else {
+    warn!(?params, "event boss without ticket cost");
+    return Ok(Vec::new());
+  };
+
+  let transaction = client.transaction().await.context("failed to start transaction")?;
+  #[rustfmt::skip]
+  let owned: i32 = transaction.query_opt(/* language=postgresql */ r#"
+    select quantity from user_items where user_id = $1 and item_type = $2 and item_id = $3
+  "#, &[&session.user_id, &(i32::from(RemoteDataItemType::BossTicket) as i64), &ticket_id]).await?
+    .map(|row| row.get(0))
+    .unwrap_or(0);
+  if owned < cost {
+    warn!(?params, ?owned, ?cost, "not enough boss tickets on the server, taking what there is");
+  }
+  let item = UpdateItemCountBy::new(&transaction)
+    .await?
+    .run(session.user_id, (RemoteDataItemType::BossTicket, ticket_id), -cost.min(owned))
+    .await?;
+  transaction.commit().await.context("failed to commit transaction")?;
+  info!(?params, ?cost, left = item.quantity, "boss tickets spent");
+  Ok(item.into_remote_data())
 }
 
 // See [Wonder_Api_MarathonSingleLogRequest_Fields]
@@ -606,12 +704,14 @@ pub async fn marathon_single_result(
     .run(session.user_id, params.party_id as i64)
     .await?;
 
-  let (member_exp, love) = make_battle_member_exp_and_character_love(&party, &client, &session).await?;
+  // Boss stages have no affinity reward in the masters
+  let (member_exp, love) = make_battle_member_exp_and_character_love(&party, &client, &session, 0).await?;
   Ok(Unsigned(BattleResultResponse {
     limit: 0,
     exp: 5,
     lvup: 0,
-    money: 85000,
+    // Eris are not stored for event bosses (no amount in the masters), don't show any
+    money: 0,
     storyunlock: vec![],
     love,
     member_exp,
