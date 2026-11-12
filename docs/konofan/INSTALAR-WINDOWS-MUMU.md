@@ -81,11 +81,9 @@ Se puede cortar con Ctrl+C y reanudar después.
 
 ## 3. Preparar MuMu
 
-1. Averigua la **IP local de tu PC**: en PowerShell, `ipconfig`, línea *Dirección IPv4* del adaptador Wi-Fi o Ethernet (algo como `192.168.1.50`).
+1. En MuMu: **Ajustes → Otros → Permiso de root: activado**, y **Ajustes → Disco → Disco del sistema: lectura y escritura** (los nombres pueden variar un poco según la versión). Reinicia MuMu.
 
-2. En MuMu: **Ajustes → Otros → Permiso de root: activado**, y **Ajustes → Disco → Disco del sistema: lectura y escritura** (los nombres pueden variar un poco según la versión). Reinicia MuMu.
-
-3. Busca el `adb` de MuMu. En PowerShell:
+2. Busca el `adb` de MuMu. En PowerShell:
 
    ```powershell
    Get-ChildItem "C:\Program Files\Netease" -Recurse -Filter adb.exe -ErrorAction SilentlyContinue | Select-Object FullName
@@ -99,21 +97,21 @@ Se puede cortar con Ctrl+C y reanudar después.
    .\adb.exe shell
    ```
 
-4. Dentro del `adb shell` (cambia la IP y el nombre del fichero por los tuyos):
+3. Dentro del `adb shell` (cambia el nombre del fichero por el tuyo):
 
    ```sh
    su
    mount -o rw,remount /          # si falla: mount -o rw,remount /system
    cp /sdcard/Download/XXXXXXXX.0 /system/etc/security/cacerts/
    chmod 644 /system/etc/security/cacerts/XXXXXXXX.0
-   echo "192.168.1.50 konofan.local" >> /system/etc/hosts
+   echo "10.0.2.2 konofan.local" >> /system/etc/hosts
    exit
    exit
    ```
 
    Y reinicia el emulador: `.\adb.exe reboot`
 
-5. **Comprobación:** abre el navegador de MuMu y entra en `https://konofan.local/static/public.pem`. Tiene que mostrar la clave **sin aviso de certificado**. Si no carga, prueba a cambiar la IP del `hosts` por `10.0.2.2` (la dirección con la que algunos emuladores ven al PC).
+4. **Comprobación:** abre el navegador de MuMu y entra en `https://konofan.local/static/public.pem`. Tiene que mostrar la clave **sin aviso de certificado**. `10.0.2.2` es la dirección con la que MuMu ve el `localhost` de Windows. No uses la IP de la red del PC: con la red en espejo de WSL, Windows no reenvía a WSL lo que llega a su propia IP.
 
 ## 4. Instalar y abrir el juego
 

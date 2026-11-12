@@ -6,7 +6,7 @@ _Última actualización: 2026-11-11_
 
 ## Estado actual
 
-Fase 3–4 (redirigir el cliente y servidor mínimo). En el PC de Pablo ya están `.wslconfig` (red en espejo), el APK stub instalado en MuMu y su disco de sistema escribible. WSL está instalado pero pendiente de un "Actualizar y reiniciar" de Windows; después falta ejecutar `setup-wsl.sh`, poner el certificado y el hosts en MuMu y la primera prueba con el juego real.
+Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó montado en el PC de Pablo: WSL2 Ubuntu 24.04 con Axel, PostgreSQL (116.271 probabilidades importadas) y nginx; MuMu con el certificado de sistema y `10.0.2.2 konofan.local` en su hosts (copia del original en `/system/etc/hosts.orig`). Falta la primera partida real.
 
 ## Qué funciona (heredado de Axel)
 
@@ -33,6 +33,7 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). En el PC de Pablo ya está
 
 - **2026-11-11 — Axel como base (fork), no solo como referencia.** Ya resuelve el protocolo, la firma JWT RS256 (RSA-1024) y LIAPP; empezar de cero repetiría meses de ingeniería inversa.
 - **2026-11-11 — Servidor en WSL2 (Ubuntu 24.04) con red en espejo.** Axel y sus scripts están pensados para Linux; con `networkingMode=mirrored` el puerto 443 de WSL se ve desde Windows y MuMu sin redirecciones.
+- **2026-11-12 — MuMu entra por `10.0.2.2`** (el localhost de Windows visto desde el emulador), no por la IP de la LAN: con la red en espejo de WSL, Windows no reenvía a WSL el tráfico hacia su propia IP.
 - **2026-11-11 — Dominio `konofan.local` y certificado propio instalado como certificado de sistema en MuMu.** El cliente (Android 12+, OkHttp) no confía en certificados de usuario.
 - **2026-11-11 — Recursos:** de momento se sirven desde el espejo de Assasans (`upstream-url`); `mirror-assets.sh` hace la copia local (~16 GiB) para no depender de él.
 - La clave RSA de firma (`key.pem`) es la pública del repo de Axel; para uso local da igual. Si algún día se comparte el servidor, generar una propia (ver `SERVER-SETUP.md`).
