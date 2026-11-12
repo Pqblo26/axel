@@ -38,6 +38,11 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
   - Regalos, canjes y Jobs suman o cobran las eris y gemas en la base de datos.
   - Las estrellas de las misiones de evento salen doradas (para poder saltarlas).
   - Métodos que el juego llamaba y no existían (cerraban la sesión con «Connection Error»): `itemuse` (usar carne de estamina: 100 o 10 por unidad, maestro `stamina_item`), `fame_supplement_buy` (comprar Fame Potions desde la Fame Quest) y `partycopy` (copiar un equipo en otro).
+- **Cuarta tanda: combate** (2026-11-12):
+  - Las estadísticas de batalla salían multiplicadas por 20: `MinMaxRange::interpolate` (src/member.rs) tenía activo un multiplicador de depuración heredado de Axel (`POST_MULTIPLIER = 20.0`). Con agilidad y suerte ×20, los enemigos casi nunca actuaban en Auto, fallaban siempre y todo moría de un golpe.
+  - Curva de crecimiento real: `min + (max − min) × ((nivel − 1) / 59)^1,2`, que cuadra con los miembros de nivel 3 y 4 de los datos capturados del servidor original (Kazuma nivel 4: 277 de vida).
+  - Cada miembro lleva su propia habilidad pasiva (`passiveskill1`) y su resistencia a atributos (`resist_attr`); antes todos llevaban las de Kazuma.
+  - Afinidad: el login mandaba cambiados el nivel (`rank`) y los puntos (`rank_progress`); la afinidad sí se guardaba.
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
 ## Qué falta
