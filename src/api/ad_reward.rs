@@ -138,13 +138,38 @@ pub async fn buy(
   session: Arc<Session>,
   Params(params): Params<BuyRequest>,
 ) -> impl IntoHandlerResponse {
+  Ok(Unsigned(purchase(&state, &session, &params).await?))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FameSupplementBuyRequest {
+  pub buy_count: i32,
+}
+
+/// Fame Quest "+" button: buys Fame Potions (shop item 14003) with quartz.
+pub async fn fame_supplement_buy(
+  state: Arc<AppState>,
+  session: Arc<Session>,
+  Params(params): Params<FameSupplementBuyRequest>,
+) -> impl IntoHandlerResponse {
+  let request = BuyRequest {
+    money_type: 2,
+    count: params.buy_count,
+    shop_item_master_id: FAME_SUPPLEMENT_SHOP_ITEM_ID,
+  };
+  Ok(Unsigned(purchase(&state, &session, &request).await?))
+}
+
+const FAME_SUPPLEMENT_SHOP_ITEM_ID: i32 = 14003;
+
+async fn purchase(state: &AppState, session: &Session, params: &BuyRequest) -> anyhow::Result<CallResponse<BuyResponse>> {
   let Some(item) = get_master_manager()
     .get_master("shop_item")
     .iter()
     .find(|item| item["id"].as_str() == Some(&params.shop_item_master_id.to_string()))
   else {
     warn!(?params, "unknown shop item");
-    return Ok(Unsigned(CallResponse::new_success(Box::new(BuyResponse::default()))));
+    return Ok(CallResponse::new_success(Box::new(BuyResponse::default())));
   };
   let field = |name: &str| item[name].as_str().and_then(|value| value.parse::<i32>().ok()).unwrap_or(0);
   let count = params.count.max(1);
@@ -165,7 +190,7 @@ pub async fn buy(
   let bought = bought_in_period(&transaction, session.user_id, item).await?;
   if limit > 0 && bought + count > limit {
     warn!(?params, ?bought, ?limit, "shop buy limit reached");
-    return Ok(Unsigned(CallResponse::new_success(Box::new(totals(&wallet, (0, 0, 0))))));
+    return Ok(CallResponse::new_success(Box::new(totals(&wallet, (0, 0, 0)))));
   }
 
   // The first purchase of the period may have its own price
@@ -178,10 +203,10 @@ pub async fn buy(
     let cost = price("money");
     if wallet.add(RemoteDataItemType::Money, -(cost as i64)).is_err() {
       warn!(?params, ?cost, money = wallet.money, "not enough eris");
-      return Ok(Unsigned(CallResponse::new_custom(
+      return Ok(CallResponse::new_custom(
         STATUS_QUARTZ_NOT_ENOUGH,
         Box::new(totals(&wallet, (0, 0, 0))),
-      )));
+      ));
     }
     (cost, 0, 0)
   } else {
@@ -190,10 +215,10 @@ pub async fn buy(
       Ok((free, paid)) => (0, paid, free),
       Err(error) => {
         warn!(?params, %error, "not enough quartz");
-        return Ok(Unsigned(CallResponse::new_custom(
+        return Ok(CallResponse::new_custom(
           STATUS_QUARTZ_NOT_ENOUGH,
           Box::new(totals(&wallet, (0, 0, 0))),
-        )));
+        ));
       }
     }
   };
@@ -204,7 +229,7 @@ pub async fn buy(
   let pack_id = item["pack_id"].as_str().unwrap_or_default();
   let Some(pack) = get_pack(pack_id) else {
     warn!(?params, ?pack_id, "shop pack not found, nothing bought");
-    return Ok(Unsigned(CallResponse::new_success(Box::new(BuyResponse::default()))));
+    return Ok(CallResponse::new_success(Box::new(BuyResponse::default())));
   };
   for (item_type, item_id, num) in pack_contents(pack) {
     let kind = RemoteDataItemType::from(item_type);
@@ -234,7 +259,7 @@ pub async fn buy(
   let mut response = CallResponse::new_success(Box::new(totals(&wallet, spent)));
   response.remote.extend(remote);
   response.remote.extend(wallet.to_remote_data());
-  Ok(Unsigned(response))
+  Ok(response)
 }
 
 /// How many of a shop item the user bought in the current limit period: today (Japan time, like the

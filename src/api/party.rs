@@ -763,3 +763,43 @@ pub async fn member_skill_up(
 
   Ok(Unsigned(response))
 }
+
+// copy=2
+// original=1
+// is_allow_trial=1
+// is_fame_quest=0
+/// "Tool" -> "Copy": copies a whole team (members, equipment, assist and trait) onto another one.
+pub async fn party_copy(state: Arc<AppState>, request: ApiRequest, session: Arc<Session>) -> impl IntoHandlerResponse {
+  let original: i64 = request.body["original"].parse().context("bad original")?;
+  let copy: i64 = request.body["copy"].parse().context("bad copy")?;
+
+  let mut client = state.get_database_client().await?;
+  let transaction = client.transaction().await.context("failed to start transaction")?;
+  #[rustfmt::skip]
+  let forms = transaction.execute(/* language=postgresql */ r#"
+    update user_party_forms as target
+    set main_member_id = source.main_member_id,
+        sub1_member_id = source.sub1_member_id,
+        sub2_member_id = source.sub2_member_id,
+        weapon_id = source.weapon_id,
+        accessory_id = source.accessory_id,
+        special_skill_id = source.special_skill_id
+    from user_party_forms as source
+    where target.user_id = $1 and target.party_id = $3
+      and source.user_id = $1 and source.party_id = $2
+      and source.form_id = target.form_id
+  "#, &[&session.user_id, &original, &copy]).await.context("failed to copy party forms")?;
+  #[rustfmt::skip]
+  transaction.execute(/* language=postgresql */ r#"
+    update user_parties as target
+    set assist_id = source.assist_id, trait_id = source.trait_id
+    from user_parties as source
+    where target.user_id = $1 and target.party_id = $3
+      and source.user_id = $1 and source.party_id = $2
+  "#, &[&session.user_id, &original, &copy]).await.context("failed to copy party")?;
+  transaction.commit().await.context("failed to commit transaction")?;
+  info!(?original, ?copy, ?forms, "party copied");
+
+  // Response is identical to party_info
+  Ok(party_info(state, session).await)
+}

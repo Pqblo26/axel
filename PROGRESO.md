@@ -37,6 +37,7 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
   - `buy`: comprar estamina (200 por 100 gemas, 30 al día), Fame Potions, retos de mazmorra y re-sorteos con gemas o eris; se gastan antes las gemas gratis. Compras guardadas en `user_shop_purchases` para los límites diarios.
   - Regalos, canjes y Jobs suman o cobran las eris y gemas en la base de datos.
   - Las estrellas de las misiones de evento salen doradas (para poder saltarlas).
+  - Métodos que el juego llamaba y no existían (cerraban la sesión con «Connection Error»): `itemuse` (usar carne de estamina: 100 o 10 por unidad, maestro `stamina_item`), `fame_supplement_buy` (comprar Fame Potions desde la Fame Quest) y `partycopy` (copiar un equipo en otro).
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
 ## Qué falta
@@ -44,7 +45,6 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
 - El **+ de las gemas** se queda cargando: el juego espera a Google Play Billing y la petición nunca llega al servidor. Solo se arregla en el cliente; de momento, gemas por el buzón.
 - Miembros, armas y accesorios no se pueden dar desde regalos ni canjes todavía.
 - La experiencia y el rango del jugador no se guardan (siempre rango 45); el máximo de estamina sale de ese rango.
-- Usar objetos de estamina (carne): falta saber qué método llama el juego (sale «Handler not found» en el registro).
 - Fame Potions: se pueden comprar, pero `use_supplement_num` al empezar una Fame Quest todavía no las gasta.
 - Boss de evento: falta dar medallas (los maestros no dicen cuántas) e intentos limitados por día (`limit`, Challenges, Battle Arena).
 - El gacha no cobra gemas/tickets (`money_type` se ignora).
