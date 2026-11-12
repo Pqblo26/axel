@@ -18,15 +18,14 @@ step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
 step "1/9 Paquetes del sistema"
 sudo apt-get update -q
-sudo apt-get install -y -q build-essential pkg-config git curl rsync openssl \
-  postgresql nginx python3-psycopg2
+# cmake + clang: needed to build boring-sys / aws-lc-sys (TLS crates) on a clean Ubuntu.
+sudo apt-get install -y -q build-essential pkg-config cmake clang libclang-dev git curl rsync openssl \
+  postgresql nginx python3-psycopg2 rustup
 
 step "2/9 Rust"
-if ! command -v cargo >/dev/null 2>&1; then
-  [ -x "$HOME/.cargo/bin/cargo" ] || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-  # shellcheck disable=SC1091
-  source "$HOME/.cargo/env"
-fi
+# rustup from Ubuntu's repositories (avoids piping a script from the internet into sh)
+rustup toolchain list 2>/dev/null | grep -q stable || rustup default stable
+export PATH="$HOME/.cargo/bin:/usr/lib/rustup/bin:$PATH"
 cargo --version
 
 step "3/9 PostgreSQL (usuario '$DB_USER', base de datos 'axel')"
