@@ -220,6 +220,27 @@ impl Member {
     get_member_level_calculator().get_level(self.xp, self.prototype.rarity, self.promotion_level)
   }
 
+  /// Base of the "strength" (PWR) values, from the member's stats at its level. The formulas give
+  /// exactly the main/sub/bonus strength of all 20 members in the captured original login data.
+  fn strength_base(&self) -> i32 {
+    let lv = self.level();
+    let hp = self.stats.hp.interpolate(lv) as f64;
+    let attack = (self.stats.attack.interpolate(lv) + self.stats.attack_magic.interpolate(lv)) as f64;
+    let defense = (self.stats.defense.interpolate(lv) + self.stats.defense_magic.interpolate(lv)) as f64;
+    (0.35 * hp + 3.0 * attack + 1.5 * defense).floor() as i32
+  }
+
+  /// Strength as the front (main) member of a form.
+  pub fn main_strength_value(&self) -> i32 {
+    self.strength_base() + 90
+  }
+
+  /// Strength added as a sub member: 30% of the base, 40% if it is the same character as the main.
+  pub fn sub_strength_value(&self, same_character: bool) -> i32 {
+    let ratio = if same_character { 0.4 } else { 0.3 };
+    (self.strength_base() as f64 * ratio).floor() as i32
+  }
+
   pub fn to_member_parameter_wire(&self) -> MemberParameterWire {
     let skills = match &self.active_skills {
       OptionallyFetched::Fetched(skills) => skills,
@@ -255,12 +276,12 @@ impl Member {
       resist_attr: 0,
       attack: self.stats.attack.interpolate(self.level()),
       waiting_room: 0,
-      main_strength: self.main_strength.strength,
-      main_strength_for_fame_quest: self.main_strength.for_fame_quest,
-      sub_strength: self.sub_strength.strength,
-      sub_strength_for_fame_quest: self.sub_strength.for_fame_quest,
-      sub_strength_bonus: self.sub_strength_bonus.strength,
-      sub_strength_bonus_for_fame_quest: self.sub_strength_bonus.for_fame_quest,
+      main_strength: self.main_strength_value(),
+      main_strength_for_fame_quest: self.main_strength_value(),
+      sub_strength: self.sub_strength_value(false),
+      sub_strength_for_fame_quest: self.sub_strength_value(false),
+      sub_strength_bonus: self.sub_strength_value(true),
+      sub_strength_bonus_for_fame_quest: self.sub_strength_value(true),
       fame_hp_rank: self.fame_stats.fame_hp,
       fame_attack_rank: self.fame_stats.fame_attack,
       fame_defense_rank: self.fame_stats.fame_defense,

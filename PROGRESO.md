@@ -42,6 +42,7 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
   - Las estadísticas de batalla salían multiplicadas por 20: `MinMaxRange::interpolate` (src/member.rs) tenía activo un multiplicador de depuración heredado de Axel (`POST_MULTIPLIER = 20.0`). Con agilidad y suerte ×20, los enemigos casi nunca actuaban en Auto, fallaban siempre y todo moría de un golpe.
   - Curva de crecimiento real: `min + (max − min) × ((nivel − 1) / 59)^1,2`, que cuadra con los miembros de nivel 3 y 4 de los datos capturados del servidor original (Kazuma nivel 4: 277 de vida).
   - Cada miembro lleva su propia habilidad pasiva (`passiveskill1`) y su resistencia a atributos (`resist_attr`); antes todos llevaban las de Kazuma.
+  - PWR de los equipos: cada fila iba con 12 300 fijo (5 × 12 300 = 61 500). Ahora se calcula: base = ⌊0,35·vida + 3·(ataque + ataque mágico) + 1,5·(defensa + def. mágica)⌋; titular = base + 90; suplente = ⌊base × 0,3⌋ (0,4 si es el mismo personaje). Da exactos los valores de los 20 miembros de los datos capturados.
   - Afinidad: el login mandaba cambiados el nivel (`rank`) y los puntos (`rank_progress`); la afinidad sí se guardaba.
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
