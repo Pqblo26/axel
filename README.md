@@ -1,64 +1,115 @@
 <div align="center">
 
-# Axel — a private server for *KonoSuba: Fantastic Days*
+# Konofan Revival
+
+Servidor local propio para volver a jugar a *KonoSuba: Fantastic Days* (Konofan), ya cerrado.
+
+Uso personal · Windows + WSL2 + MuMu · basado en [Axel](https://github.com/Assasans/axel)
 
 </div>
 
-## Current progress
+## Qué es
 
-The first scene ("And so the Adventure Begins!") works.
-New account sequence works, you can edit your profile.
-On first login, you get all members with randomized XP.
-The home and profile menus work, and most actions there don't cause errors
-(see [Broken features](#broken-features) for details), but neither they save any progress.
+Un servidor que emula al oficial de Konofan y corre en mi propio PC, sin hosting. El juego (el cliente *stub* de Assasans) se conecta a `https://konofan.local` en lugar de a los servidores oficiales, y todo el progreso queda guardado en una base de datos local.
 
-A lot of gacha banners (including collaborations ones) is visible, but still not all 947 of them.
-Loot pool is completely random, not saved to database. Dropped members are saved to database.
+No es solo una copia para jugar: el objetivo es poder **controlar el juego desde el servidor**, es decir, decidir qué banners hay, con qué probabilidades, qué eventos están activos y cómo son los personajes, e incluso añadir contenido nuevo.
 
-All main quests are enabled. All stories (including collaboration ones) are enabled.
-Battles work rewards are actually given (for Main Quests, Free Quests and Fame Quests),
-you can change your party and upgrade members.
+Parte de [Axel](https://github.com/Assasans/axel), el servidor de fans de Assasans, que ya resolvía lo más difícil (el protocolo, la firma de las respuestas y la protección LIAPP). Este fork lo adapta para jugar en Windows con MuMu y le va añadiendo los sistemas que faltaban.
 
-All costumes and backgrounds are unlocked. Note that these customizations are not stored
-on the server by client design, so they are not synced across accounts and devices.
+## Estado
 
-<p>
-  <img src="https://files.catbox.moe/xvvt4z.png" width="300px">
-  <img src="https://files.catbox.moe/x6a55m.png" width="300px">
-  <img src="https://files.catbox.moe/ghnpk8.webp" width="300px">
-  <img src="https://files.catbox.moe/jxc5gp.png" width="300px">
-</p>
+Se puede jugar desde el tutorial en adelante: misiones, historias, equipo, gacha, tienda y buzón funcionan sobre el servidor propio. El detalle de cada cambio, los fallos conocidos y las decisiones están en **[PROGRESO.md](PROGRESO.md)**.
 
-### Broken features
+**Funciona**
 
-- \[Home\] → \[Shop\] → Item → \[Buy\] → \[OK\], purchase always fails (client stub issue)
-- \[Quest\] → \[Event\] → \[Draw\], unimplemented
-- Login screen → \[Menu\] → \[Data Transfer\] → \[Link to a Google account\], does nothing, `libnative-googlesignin.so` is missing
+- Tutorial, cuenta y perfil; misiones principales, libres, de evento y de fama; historias (también las de colaboración); equipo y mejora de personajes; mazmorras; multijugador básico (heredado de Axel).
+- **Gacha con las probabilidades reales** del juego original, garantía en la 10.ª tirada de una multi e historial de tiradas.
+- **Monedas y consumos guardados**: gemas, eris y estamina (con recarga), tickets de salto, compras con límites y afinidad.
+- Buzón de regalos, anuncios propios en *Note*, carrusel de la portada configurable, Jobs (expediciones) y Exchange.
+- Recursos del juego (~35 GB) servidos desde una copia local, sin depender de ningún servidor externo.
 
-## Setup
+**Falta**
 
-See [CLIENT-SETUP.md](CLIENT-SETUP.md) for instructions on how to set up the client.
+- El gacha todavía no cobra gemas ni tickets, y los banners están escritos en el código.
+- Rango y experiencia del jugador (la cuenta nace en rango 45 con todo desbloqueado, herencia de Axel).
+- Medallas e intentos diarios de los bosses de evento y de Battle Arena; Fame Potions al empezar una Fame Quest.
+- Combate: los enemigos no atacan en Auto y los golpes fallan sin Auto.
+- El «+» de gemas y los productos de pago se cuelgan esperando a Google Play (solo se arregla en el cliente).
+- Unos 100 métodos del protocolo siguen siendo *stubs*.
 
-See [SERVER-SETUP.md](SERVER-SETUP.md) for instructions on how to set up the server and the database.
+## Cómo está montado
 
-See [DUMPING.md](DUMPING.md) for instructions on how to inspect the game code yourself.
+```
+MuMu (cliente stub)  --HTTPS-->  Windows :443  ==(WSL2, red en espejo)==>  nginx  -->  Axel :2020 / :2021  -->  PostgreSQL
+```
 
-### Game resources
+- **Axel** (Rust, axum): la API del juego (`:2020`) y el servidor de recursos estáticos (`:2021`).
+- **PostgreSQL**: jugadores, inventario, monedas, tiradas y probabilidades del gacha.
+- **nginx**: pone el HTTPS (el juego no admite otra cosa) y junta todo bajo `konofan.local`.
+- **WSL2 con Ubuntu 24.04**: Linux dentro de Windows, porque Axel y sus scripts están pensados para Linux.
+- **MuMu** (Android 12): tiene instalada la CA propia como certificado de sistema y `10.0.2.2 konofan.local` en su `/etc/hosts`.
 
-Game needs around 16 GiB of resources, they are stored on a separate server with file indexing enabled: https://smb.assasans.dev/konofd/.
-Alternatively, rsync server is available at `rsync://aqua.assasans.dev/konofd/`.
+## Uso diario
 
-## License
+En el escritorio de Windows:
 
-Licensed under either of
+| Acceso directo | Qué hace |
+|---|---|
+| `Konofan servidor.bat` | Arranca Axel dentro de WSL. |
+| `Konofan registros.bat` | Muestra el registro del servidor en directo. |
+| `Konofan apagar.bat` | Para Axel. |
 
-* Apache License, Version 2.0
-  ([LICENSE-APACHE](LICENSE-APACHE) or https://apache.org/licenses/LICENSE-2.0)
-* MIT license
-  ([LICENSE-MIT](LICENSE-MIT) or https://opensource.org/licenses/MIT)
+En el launcher del stub, el servidor es `https://konofan.local/static/` (**con la barra final**) y el método de parcheo **LoadMetadataFile (And64InlineHook)**.
 
-at your option.
+Para reportar un fallo basta con apuntar qué estabas haciendo y la hora aproximada: se cruza con los registros de `~/axel/logs`.
 
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
-dual licensed as above, without any additional terms or conditions.
+### Actualizar el servidor tras fusionar cambios
+
+Dentro de Ubuntu (WSL):
+
+```bash
+cd ~/axel
+git fetch origin
+git checkout -B main origin/main
+./migrations/migrate.sh
+cargo build --release
+```
+
+Y después se reinicia Axel con `Konofan apagar.bat` y `Konofan servidor.bat`.
+
+### Herramientas
+
+- `scripts/konofan/enviar-regalo.sh`: manda gemas, eris, objetos o estamina al buzón de un jugador o de todos.
+- `config/home-banners.toml`: qué banners salen en el carrusel de la portada.
+- Tabla `news` de la base de datos: los anuncios de *Note*.
+
+## Instalar desde cero
+
+La guía paso a paso (WSL2, servidor, certificados, MuMu y cliente) está en **[docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md)**. El script `scripts/konofan/setup-wsl.sh` hace casi todo el trabajo dentro de Ubuntu, y `scripts/konofan/mirror-assets.sh` descarga la copia local de los recursos.
+
+La documentación original de Axel, en inglés, sigue en [SERVER-SETUP.md](SERVER-SETUP.md), [DATABASE-SETUP.md](DATABASE-SETUP.md), [CLIENT-SETUP.md](CLIENT-SETUP.md) y [DUMPING.md](DUMPING.md).
+
+## Hoja de ruta
+
+1. ~~Redirigir el cliente al servidor local~~
+2. ~~Login, carga del jugador y gacha con probabilidades reales~~
+3. Sistemas principales: terminar monedas y consumos, combate, rango del jugador, eventos y Battle Arena.
+4. Banners del gacha en la base de datos, para poder editarlos.
+5. **Panel web de administración** en `https://konofan.local/admin/`: ver jugadores, tiradas y registros; editar banners, probabilidades, eventos y personajes.
+6. Contenido nuevo: personajes, banners y eventos propios.
+
+## Límites
+
+- **Solo para uso personal y en local.** Konofan está cerrado; esto no es un servidor público ni se va a abrir a otros jugadores.
+- **No se distribuyen el cliente ni los recursos originales** del juego. Este repositorio contiene solo código del servidor, scripts, configuración y los datos maestros que ya incluía Axel. Si algún día se comparte algo, serán herramientas o parches propios.
+- La clave de firma (`key.pem`) es la pública de Axel; vale para uso local, pero habría que generar una propia si el servidor se expusiera fuera de casa.
+
+## Créditos
+
+- [Assasans](https://github.com/Assasans) por [Axel](https://github.com/Assasans/axel), el [cliente stub](https://github.com/Assasans/konofd-client-stub) y el espejo de recursos y APKs.
+- CatzumaGaming por las tablas de probabilidades del gacha original.
+- *KonoSuba: Fantastic Days* pertenece a sus respectivos titulares (Sumzap, Sesisoft y los de *KonoSuba*). Este proyecto no tiene relación con ellos.
+
+## Licencia
+
+Como Axel, el código está bajo licencia [MIT](LICENSE-MIT) o [Apache 2.0](LICENSE-APACHE), a elección.

@@ -48,7 +48,7 @@ Tiempo aproximado: 30–45 minutos, casi todo esperando descargas y la compilaci
 Abre **Ubuntu** desde el menú Inicio y ejecuta:
 
 ```bash
-git clone https://github.com/Pqblo26/axel ~/axel
+git clone https://github.com/Pqblo26/konofan-revival ~/axel
 cd ~/axel
 ./scripts/konofan/setup-wsl.sh
 ```
