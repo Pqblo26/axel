@@ -17,7 +17,8 @@ use crate::handler::{IntoHandlerResponse, Unsigned};
 use crate::item::UpdateItemCountBy;
 use crate::level::get_member_level_calculator;
 use crate::member::{
-  materialize_member_row, materialize_member_row_impl, FetchUserMemberSkillsIn, FetchUserMembersIn, Member, MemberActiveSkill,
+  materialize_member_row, materialize_member_row_impl, FetchUserMemberSkillsIn, FetchUserMembers, FetchUserMembersIn, Member,
+  MemberActiveSkill,
   MemberPrototype, MemberStrength, OptionallyFetched,
 };
 use crate::user::session::Session;
@@ -298,10 +299,47 @@ pub async fn update_party_form(
 // elemental=["none","none"]
 // is_fame_quest=0
 /// "Suggest party" button
+/// "Tool" -> "Suggest": builds the strongest team from the user's members. The five strongest
+/// members (one per character) go in front, and the next strongest fill the sub slots, without
+/// repeating a character in the team. Weapons and accessories are kept.
 pub async fn party_offer(state: Arc<AppState>, request: ApiRequest, session: Arc<Session>) -> impl IntoHandlerResponse {
-  let party_no: i32 = request.body["party_no"].parse().unwrap();
+  let party_no: i64 = request.body["party_no"].parse().context("bad party_no")?;
 
-  warn!(?party_no, "encountered stub: party_offer");
+  let mut client = state.get_database_client().await?;
+  let mut members = FetchUserMembers::new(&client).await?.run(session.user_id).await?;
+  members.sort_by_key(|member| std::cmp::Reverse(member.main_strength_value()));
+
+  let mut used_characters = std::collections::HashSet::new();
+  let mut picked = Vec::new();
+  for member in &members {
+    if picked.len() == 15 {
+      break;
+    }
+    if used_characters.insert(member.prototype.character_id) {
+      picked.push(member.id as i64);
+    }
+  }
+  // Slots: 5 mains first, then the subs of form 1, 2... in order
+  let slot = |index: usize| picked.get(index).copied().unwrap_or(0);
+
+  let transaction = client.transaction().await.context("failed to start transaction")?;
+  for form in 0..5usize {
+    #[rustfmt::skip]
+    transaction.execute(/* language=postgresql */ r#"
+      update user_party_forms
+      set main_member_id = $4, sub1_member_id = $5, sub2_member_id = $6
+      where user_id = $1 and party_id = $2 and form_id = $3
+    "#, &[
+      &session.user_id,
+      &party_no,
+      &(form as i64 + 1),
+      &slot(form),
+      &slot(5 + form * 2),
+      &slot(6 + form * 2),
+    ]).await.context("failed to update party form")?;
+  }
+  transaction.commit().await.context("failed to commit transaction")?;
+  info!(?party_no, ?picked, "party suggested");
 
   // Response is identical to party_info
   Ok(party_info(state, session).await)
@@ -314,7 +352,15 @@ pub async fn party_offer(state: Arc<AppState>, request: ApiRequest, session: Arc
 pub async fn party_reset(state: Arc<AppState>, request: ApiRequest, session: Arc<Session>) -> impl IntoHandlerResponse {
   let party_no: i32 = request.body["party_no"].parse().unwrap();
 
-  warn!(?party_no, "encountered stub: party_reset");
+  // Empties the whole team: members, sub members, weapons and accessories
+  let client = state.get_database_client().await?;
+  #[rustfmt::skip]
+  let forms = client.execute(/* language=postgresql */ r#"
+    update user_party_forms
+    set main_member_id = 0, sub1_member_id = 0, sub2_member_id = 0, weapon_id = 0, accessory_id = 0
+    where user_id = $1 and party_id = $2
+  "#, &[&session.user_id, &(party_no as i64)]).await.context("failed to reset party")?;
+  info!(?party_no, ?forms, "party reset");
 
   // Response is identical to party_info
   Ok(party_info(state, session).await)

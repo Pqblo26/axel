@@ -14,7 +14,7 @@ use crate::build_info::BUILD_INFO;
 use crate::call::{CallCustom, CallResponse};
 use crate::extractor::Params;
 use crate::handler::{IntoHandlerResponse, Signed};
-use crate::notification::{FriendGreetingNotify, IntoNotificationData};
+use crate::notification::IntoNotificationData;
 use crate::user::id::UserId;
 use crate::user::session::Session;
 use crate::user::uuid::UserUuid;
@@ -255,9 +255,9 @@ pub async fn login(state: Arc<AppState>, Params(params): Params<LoginRequestRequ
     NotificationData::new(1, 7, 16, 0, "".to_string(), "".to_string()),
     NotificationData::new(1, 7, 18, 1722864558, "".to_string(), "".to_string()),
     // Missions
-    NotificationData::new(1, 7, 3, 2, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 3, 0, "".to_string(), "".to_string()),
     // Something related to Missions
-    NotificationData::new(1, 7, 13, 7, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 13, 0, "".to_string(), "".to_string()),
     NotificationData::new(1, 7, 11, 0, "".to_string(), "".to_string()),
     NotificationData::new(1, 7, 12, 0, "".to_string(), "".to_string()),
     NotificationData::new(1, 7, 24, 0, "".to_string(), "".to_string()),
@@ -271,7 +271,7 @@ pub async fn login(state: Arc<AppState>, Params(params): Params<LoginRequestRequ
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_presentButton], counted
     // Gifts badge (type 7, key 2) is sent above with the real number of presents
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_missionButton], counted
-    NotificationData::new(1, 7, 3, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 3, 0, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_shopButton], [EnableFreeItemFlag], boolean
     NotificationData::new(1, 7, 4, 0, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_exchangeButton], boolean
@@ -296,20 +296,8 @@ pub async fn login(state: Arc<AppState>, Params(params): Params<LoginRequestRequ
     // See [Wonder.Util.NotificationAnnounceUtil$$ShouldShowInformation] for notification list (15, 1)
     // See [Wonder.Util.NotificationAnnounceUtil$$ShouldShowAdvertisement] for notification (15, 2)
 
-    FriendGreetingNotify::new({
-      let hash = BUILD_INFO.git_hash.chars().take(8).collect();
-      let revision = if BUILD_INFO.git_dirty {
-        format!("{hash}-dirty")
-      } else {
-        hash
-      };
-
-      if BUILD_INFO.profile == "debug" {
-        format!("axel/{revision} (development build)")
-      } else {
-        format!("axel/{revision}")
-      }
-    }).into_notification_data(),
+    // Axel showed its version here as a friend greeting (key 27), which made the Friend button open the
+    // Greeting Log every time. No greetings: there are no other players.
   ]);
 
   Ok(Signed(response, session))
