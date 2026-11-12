@@ -194,14 +194,23 @@ pub async fn login(state: Arc<AppState>, Params(params): Params<LoginRequestRequ
     Ok(count) => response.add_notifications(vec![crate::api::present::present_badge(count)]),
     Err(error) => warn!(?error, "failed to count presents for the Gifts badge"),
   }
+  match crate::api::expedition::any_expedition_complete(&client, session.user_id).await {
+    Ok(complete) => response.add_notifications(vec![NotificationData::new(
+      1,
+      7,
+      6,
+      complete as i32,
+      "".to_string(),
+      "".to_string(),
+    )]),
+    Err(error) => warn!(?error, "failed to check jobs for the Jobs badge"),
+  }
   response.add_notifications(vec![
-    // Jobs
-    NotificationData::new(1, 7, 6, 0, "".to_string(), "".to_string()),
     NotificationData::new(1, 8, 0, 0, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 14, 1, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 14, 1, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 14, 1, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 14, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 14, 0, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 14, 0, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 14, 0, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 14, 0, "".to_string(), "".to_string()),
     NotificationData::new(1, 6, 1, 30030001, "".to_string(), "".to_string()),
     NotificationData::new(1, 10, 230731, 52307325, "".to_string(), "".to_string()),
     NotificationData::new(1, 10, 230831, 52308305, "".to_string(), "".to_string()),
@@ -238,7 +247,7 @@ pub async fn login(state: Arc<AppState>, Params(params): Params<LoginRequestRequ
     NotificationData::new(1, 19, 5, 1722620388, "".to_string(), "107".to_string()),
     NotificationData::new(1, 19, 5, 0, "".to_string(), "23083".to_string()),
     NotificationData::new(1, 19, 5, 1722620388, "".to_string(), "50081".to_string()),
-    NotificationData::new(1, 7, 23, 1, "[\"12209\",\"12206\",\"12204\",\"12203\",\"12205\",\"12207\",\"12208\",\"12210\",\"12211\",\"12212\",\"12320\",\"12900\",\"12100\",\"12200\",\"12300\",\"12310\"]".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 23, 0, "[]".to_string(), "".to_string()),
     NotificationData::new(1, 7, 401, 0, "".to_string(), "".to_string()),
     NotificationData::new(1, 7, 4011, 0, "".to_string(), "".to_string()),
     NotificationData::new(1, 7, 4012, 0, "".to_string(), "".to_string()),
@@ -252,35 +261,35 @@ pub async fn login(state: Arc<AppState>, Params(params): Params<LoginRequestRequ
     NotificationData::new(1, 7, 11, 0, "".to_string(), "".to_string()),
     NotificationData::new(1, 7, 12, 0, "".to_string(), "".to_string()),
     NotificationData::new(1, 7, 24, 0, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 14, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 14, 0, "".to_string(), "".to_string()),
 
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_infoButton], boolean
-    NotificationData::new(1, 7, 1, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 1, 0, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], seems to be fallback if [1] is not present
     // [Wonder.Util.NotificationAnnounceUtil$$ShouldShowUserNews] checks for it
-    NotificationData::new(1, 7, 25, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 25, 0, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_presentButton], counted
     // Gifts badge (type 7, key 2) is sent above with the real number of presents
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_missionButton], counted
     NotificationData::new(1, 7, 3, 1, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_shopButton], [EnableFreeItemFlag], boolean
-    NotificationData::new(1, 7, 4, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 4, 0, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_exchangeButton], boolean
-    NotificationData::new(1, 7, 5, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 5, 0, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_expeditionButton], boolean
-    NotificationData::new(1, 7, 6, 1, "".to_string(), "".to_string()),
+    // Jobs badge is sent below from the real job state
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_benefitButton], boolean
-    NotificationData::new(1, 7, 7, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 7, 0, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_missionButton], boolean
-    NotificationData::new(1, 7, 13, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 13, 0, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_multiBattleInvitedRoomButton], boolean
-    NotificationData::new(1, 7, 26, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 26, 0, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_surpriseEventButton], boolean
-    NotificationData::new(1, 7, 43, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 43, 0, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_specialBoxGachaButton], boolean
-    NotificationData::new(1, 7, 45, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 45, 0, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_keywordCampaignButton], boolean
-    NotificationData::new(1, 7, 46, 1, "".to_string(), "".to_string()),
+    NotificationData::new(1, 7, 46, 0, "".to_string(), "".to_string()),
 
     // See [Wonder.UI.Mypage.MyPageScreen$$IsMenuBadgeOn] for conditions to show "Home" button badge
     // See [Wonder.Util.CharacterUtil._OpenCharacterRankUpIfNeed_d__5$$MoveNext] for notification list type 39

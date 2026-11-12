@@ -45,6 +45,7 @@ pub async fn run_migrations(session: &Session, client: &mut Client) {
       migration!(add_user_home_illustrations),
       migration!(set_user_current_home_member),
       migration!(add_user_welcome_presents),
+      migration!(add_user_exchange_medals),
     ]
   });
 
@@ -809,4 +810,26 @@ async fn add_user_welcome_presents(session: &Session, client: &mut Client) -> u6
       .unwrap();
   }
   rows_modified
+}
+
+/// Goddess medals and skip tickets used to be added on every login without being stored, so exchanging
+/// or earning them did nothing. Store the same starting amounts once so they can be spent and earned.
+async fn add_user_exchange_medals(session: &Session, client: &mut Client) -> u64 {
+  #[rustfmt::skip]
+  let statement = client
+    .prepare(/* language=postgresql */ r#"
+      insert into user_items (user_id, item_type, item_id, quantity)
+      values ($1, 20, 1011, 101100),
+             ($1, 20, 1012, 101200),
+             ($1, 8, 1, 800)
+      on conflict (user_id, item_type, item_id) do nothing
+    "#)
+    .await
+    .context("failed to prepare statement")
+    .unwrap();
+  client
+    .execute(&statement, &[&session.user_id])
+    .await
+    .context("failed to execute query")
+    .unwrap()
 }

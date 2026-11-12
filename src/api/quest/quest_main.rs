@@ -81,7 +81,7 @@ pub async fn quest_main_area_list() -> impl IntoHandlerResponse {
     hard_area_list: areas.clone(),
     expert_area_list: areas,
   }));
-  response.add_notifications(vec![NotificationData::new(1, 7, 20, 1, "".to_owned(), "".to_owned())]);
+  response.add_notifications(vec![NotificationData::new(1, 7, 20, 0, "".to_owned(), "".to_owned())]);
 
   Ok(Unsigned(response))
 }
