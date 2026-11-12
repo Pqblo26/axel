@@ -3,6 +3,7 @@
 use crate::api::dungeon::BattleSkipReward;
 use crate::api::master_all::get_master_manager;
 use crate::api::quest::quest_hunting::BattleHuntingSkipRequest;
+use crate::api::quest::skip::skip_quests;
 use crate::api::{NotificationData, RemoteDataItemType};
 use crate::call::{CallCustom, CallResponse};
 use crate::extractor::Params;
@@ -168,17 +169,5 @@ pub async fn battle_skip(
   session: Arc<Session>,
   Params(params): Params<BattleHuntingSkipRequest>,
 ) -> impl IntoHandlerResponse {
-  warn!(?params, "encountered stub: battle_skip");
-
-  Ok(Unsigned(BattleSkipResponse {
-    lvup: 0,
-    reward: vec![BattleSkipReward {
-      dropnum: 1,
-      exp: 500,
-      money: 1000,
-      itemtype: RemoteDataItemType::RealMoney.into(),
-      itemid: 1,
-      itemnum: 5000,
-    }],
-  }))
+  Ok(Unsigned(skip_quests(&state, &session, &params.skip).await?))
 }

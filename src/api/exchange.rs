@@ -9,7 +9,8 @@ use crate::AppState;
 use crate::api::RemoteDataItemType;
 use crate::api::master_all::{get_master_manager, get_masters, get_masters_definitely_initialized};
 use crate::api::present::{Grant, grant_kind};
-use crate::blob::{AddSingletonItem, DeleteMember, IntoRemoteData};
+use crate::blob::{DeleteMember, IntoRemoteData};
+use crate::user::wallet::Wallet;
 use crate::database::QueryExecutor;
 use crate::user::id::UserId;
 use crate::call::{CallCustom, CallResponse};
@@ -138,7 +139,7 @@ async fn count_exchanged<'a>(
 }
 
 /// `pack` master (what an exchange or shop item gives), indexed by ID. Large, so parsed once.
-fn get_pack(pack_id: &str) -> Option<&'static Value> {
+pub(crate) fn get_pack(pack_id: &str) -> Option<&'static Value> {
   static PACKS: OnceLock<HashMap<String, Value>> = OnceLock::new();
   PACKS
     .get_or_init(|| {
@@ -153,7 +154,7 @@ fn get_pack(pack_id: &str) -> Option<&'static Value> {
 }
 
 /// Items in a pack: the main item and up to 5 bonuses.
-fn pack_contents(pack: &Value) -> Vec<(i32, i64, i32)> {
+pub(crate) fn pack_contents(pack: &Value) -> Vec<(i32, i64, i32)> {
   let int = |name: &str| pack[name].as_str().and_then(|value| value.parse::<i64>().ok()).unwrap_or(0);
   let mut contents = vec![(int("item_type") as i32, int("item_id"), int("item_num") as i32)];
   for n in 1..=5 {
@@ -296,11 +297,14 @@ pub async fn exchange(
 
   // Check and pay
   let update_items = UpdateItemCountBy::new(&transaction).await?;
+  let mut wallet = Wallet::load(&transaction, session.user_id).await?;
   for (&(item_type, item_id), &num) in &cost {
     let kind = RemoteDataItemType::from(item_type);
     if matches!(grant_kind(kind), Grant::Singleton) {
-      // Eris/quartz are not stored server-side yet: tell the client to subtract them
-      response.remote.extend(AddSingletonItem::new(kind, -num).into_remote_data());
+      if let Err(error) = wallet.add(kind, -(num as i64)) {
+        warn!(?params, %error, "not enough to exchange");
+        return Ok(Signed(CallResponse::new_success_empty(), session));
+      }
       continue;
     }
     #[rustfmt::skip]
@@ -326,7 +330,9 @@ pub async fn exchange(
     let kind = RemoteDataItemType::from(item_type);
     let num = num * params.num;
     match grant_kind(kind) {
-      Grant::Singleton => response.remote.extend(AddSingletonItem::new(kind, num).into_remote_data()),
+      Grant::Singleton => {
+        wallet.add(kind, num as i64)?;
+      }
       Grant::Item => {
         let item = update_items.run(session.user_id, (kind, item_id), num).await?;
         response.remote.extend(item.into_remote_data());
@@ -341,7 +347,9 @@ pub async fn exchange(
   transaction.execute(/* language=postgresql */ r#"
     insert into user_exchanges (user_id, exchange_item_id, num) values ($1, $2, $3)
   "#, &[&session.user_id, &entry.id, &params.num]).await.context("failed to log exchange")?;
+  wallet.save(&transaction, session.user_id).await?;
   transaction.commit().await.context("failed to commit transaction")?;
+  response.remote.extend(wallet.to_remote_data());
   info!(?params, ?cost, pack_id = entry.pack_id, "exchanged");
 
   Ok(Signed(response, session))

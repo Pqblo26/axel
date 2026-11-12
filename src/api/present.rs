@@ -13,6 +13,7 @@ use tracing::{info, warn};
 use crate::AppState;
 use crate::api::{NotificationData, RemoteDataItemType};
 use crate::blob::IntoRemoteData;
+use crate::user::wallet::Wallet;
 use crate::call::{CallCustom, CallResponse};
 use crate::database::QueryExecutor;
 use crate::extractor::Params;
@@ -54,8 +55,7 @@ pub async fn count_pending_presents<'a>(
 
 /// How a present is granted when accepted.
 pub(crate) enum Grant {
-  /// Currencies and other values the client keeps as a single number (quartz, eris, stamina...).
-  /// The server does not store them yet (they are reset on login), the client adds the amount itself.
+  /// Currencies and stamina, which the client keeps as a single number: stored in `user_wallet`.
   Singleton,
   /// Countable items stored in `user_items` (tickets, potions, materials, medals...).
   Item,
@@ -283,6 +283,7 @@ pub async fn present_get(
   "#, &[&session.user_id, &ids]).await.context("failed to fetch presents")?;
 
   let update_items = UpdateItemCountBy::new(&transaction).await?;
+  let mut wallet = Wallet::load(&transaction, session.user_id).await?;
   #[rustfmt::skip]
   let mark_received = transaction.prepare(/* language=postgresql */ r#"
     update user_presents
@@ -303,7 +304,9 @@ pub async fn present_get(
     let expireddate = expiry_timestamp(row.get("expires_at"));
 
     match grant_kind(item_type) {
-      Grant::Singleton => {}
+      Grant::Singleton => {
+        wallet.add(item_type, item_num as i64)?;
+      }
       Grant::Item => {
         let item = update_items
           .run(session.user_id, (item_type, item_id), item_num)
@@ -347,6 +350,8 @@ pub async fn present_get(
     });
   }
 
+  wallet.save(&transaction, session.user_id).await?;
+  remote.extend(wallet.to_remote_data());
   let count = count_pending_presents(&transaction, session.user_id).await?;
   transaction.commit().await.context("failed to commit transaction")?;
   info!(

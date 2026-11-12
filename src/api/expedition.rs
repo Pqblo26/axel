@@ -12,6 +12,7 @@ use crate::api::RemoteDataItemType;
 use crate::api::interaction::Character;
 use crate::api::master_all::get_master_manager;
 use crate::blob::IntoRemoteData;
+use crate::user::wallet::Wallet;
 use crate::call::{CallCustom, CallResponse};
 use crate::database::QueryExecutor;
 use crate::extractor::Params;
@@ -374,7 +375,11 @@ pub async fn expedition_set(
       item_num,
     });
   }
-  // Eris go in `money` (shown with the items); they are not stored server-side yet.
+  // Eris: also shown in `money`
+  let mut wallet = Wallet::load(&transaction, session.user_id).await?;
+  wallet.add(RemoteDataItemType::Money, money as i64)?;
+  wallet.save(&transaction, session.user_id).await?;
+  remote.extend(wallet.to_remote_data());
 
   transaction.commit().await.context("failed to commit transaction")?;
   info!(?money, ?items, ?intimacy, "job rewards");

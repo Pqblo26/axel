@@ -4,6 +4,8 @@ use serde_json::Value;
 pub mod quest_fame;
 pub mod quest_hunting;
 pub mod quest_main;
+pub mod skip;
+pub mod stage;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuestRewardItem {

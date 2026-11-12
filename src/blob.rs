@@ -3,6 +3,7 @@ use crate::api::{CharacterParameter, MemberParameterWire, RemoteData, RemoteData
 use crate::level::get_intimacy_level_calculator;
 use crate::member::{FetchUserMemberSkillsIn, FetchUserMembers, MemberPrototype};
 use crate::user::session::Session;
+use crate::user::wallet::Wallet;
 use crate::AppState;
 use anyhow::Context;
 use std::collections::HashMap;
@@ -274,12 +275,16 @@ pub async fn get_login_remote_data(state: &AppState, session: &Session) -> Vec<R
       .collect::<Vec<_>>()
   };
 
+  // Currencies and stamina are stored in user_wallet
+  let wallet = Wallet::load(&client, session.user_id).await.unwrap();
+  wallet.save(&client, session.user_id).await.unwrap();
+
   #[cfg_attr(rustfmt, rustfmt::skip)]
   vec![
     ClearUserParams.into_remote_data(),
-    AddSingletonItem::new(RemoteDataItemType::Money, 85720).into_remote_data(),
-    AddSingletonItem::new(RemoteDataItemType::RealMoney, 100000).into_remote_data(),
-    AddSingletonItem::new(RemoteDataItemType::RealMoneyFree, 1000000).into_remote_data(),
+    AddSingletonItem::new(RemoteDataItemType::Money, wallet.money.min(i32::MAX as i64) as i32).into_remote_data(),
+    AddSingletonItem::new(RemoteDataItemType::RealMoney, wallet.real_money).into_remote_data(),
+    AddSingletonItem::new(RemoteDataItemType::RealMoneyFree, wallet.real_money_free).into_remote_data(),
     // AddMember::new(MemberPrototype::load_from_id(1001100).create_member_wire(), "front").into_remote_data(),
     // AddMember::new(MemberParameterWire { id: 11, lv: 4, exp: 150, member_id: 1001100, ac_skill_id_a: 21503639, ac_skill_lv_a: 1, ac_skill_val_a: 110, ac_skill_id_b: 0, ac_skill_lv_b: 1, ac_skill_val_b: 0, ac_skill_id_c: 0, ac_skill_lv_c: 1, ac_skill_val_c: 130, hp: 277, magicattack: 31, defense: 24, magicdefence: 22, agility: 72, dexterity: 78, luck: 88, limit_break: 0, character_id: 100, passiveskill: 0, specialattack: 0, resist_state: 0, resist_attr: 0, attack: 32, waiting_room: 0, main_strength: 444, main_strength_for_fame_quest: 444, sub_strength: 106, sub_strength_for_fame_quest: 106, sub_strength_bonus: 141, sub_strength_bonus_for_fame_quest: 141, fame_hp_rank: 0, fame_attack_rank: 0, fame_defense_rank: 0, fame_magicattack_rank: 0, fame_magicdefence_rank: 0, skill_pa_fame_list: vec![] }, "front").into_remote_data(),
     // AddMember::new(MemberParameterWire { id: 8, lv: 1, exp: 0, member_id: 1002102, ac_skill_id_a: 0, ac_skill_lv_a: 1, ac_skill_val_a: 110, ac_skill_id_b: 0, ac_skill_lv_b: 1, ac_skill_val_b: 20, ac_skill_id_c: 0, ac_skill_lv_c: 1, ac_skill_val_c: 130, hp: 257, magicattack: 28, defense: 21, magicdefence: 20, agility: 73, dexterity: 79, luck: 87, limit_break: 0, character_id: 100, passiveskill: 0, specialattack: 0, resist_state: 0, resist_attr: 0, attack: 28, waiting_room: 0, main_strength: 409, main_strength_for_fame_quest: 409, sub_strength: 95, sub_strength_for_fame_quest: 95, sub_strength_bonus: 127, sub_strength_bonus_for_fame_quest: 127, fame_hp_rank: 0, fame_attack_rank: 0, fame_defense_rank: 0, fame_magicattack_rank: 0, fame_magicdefence_rank: 0, skill_pa_fame_list: vec![] }, "front").into_remote_data(),
@@ -303,7 +308,7 @@ pub async fn get_login_remote_data(state: &AppState, session: &Session) -> Vec<R
     // AddMember::new(MemberParameterWire { id: 1, lv: 0, exp: 0, member_id: 1192102, ac_skill_id_a: 0, ac_skill_lv_a: 0, ac_skill_val_a: 0, ac_skill_id_b: 0, ac_skill_lv_b: 0, ac_skill_val_b: 0, ac_skill_id_c: 0, ac_skill_lv_c: 0, ac_skill_val_c: 0, hp: 0, magicattack: 0, defense: 0, magicdefence: 0, agility: 0, dexterity: 0, luck: 0, limit_break: 0, character_id: 0, passiveskill: 0, specialattack: 0, resist_state: 0, resist_attr: 0, attack: 0, waiting_room: 0, main_strength: 0, main_strength_for_fame_quest: 0, sub_strength: 0, sub_strength_for_fame_quest: 0, sub_strength_bonus: 0, sub_strength_bonus_for_fame_quest: 0, fame_hp_rank: 0, fame_attack_rank: 0, fame_defense_rank: 0, fame_magicattack_rank: 0, fame_magicdefence_rank: 0, skill_pa_fame_list: vec![] }, "back").into_remote_data(),
     // AddMember::new(MemberParameterWire { id: 111, lv: 1, exp: 0, member_id: 1282100, ac_skill_id_a: 0, ac_skill_lv_a: 1, ac_skill_val_a: 93, ac_skill_id_b: 0, ac_skill_lv_b: 1, ac_skill_val_b: 128, ac_skill_id_c: 0, ac_skill_lv_c: 1, ac_skill_val_c: 122, hp: 239, magicattack: 32, defense: 24, magicdefence: 24, agility: 71, dexterity: 74, luck: 72, limit_break: 0, character_id: 128, passiveskill: 0, specialattack: 0, resist_state: 0, resist_attr: 0, attack: 25, waiting_room: 0, main_strength: 416, main_strength_for_fame_quest: 416, sub_strength: 97, sub_strength_for_fame_quest: 97, sub_strength_bonus: 130, sub_strength_bonus_for_fame_quest: 130, fame_hp_rank: 0, fame_attack_rank: 0, fame_defense_rank: 0, fame_magicattack_rank: 0, fame_magicdefence_rank: 0, skill_pa_fame_list: vec![] }, "front").into_remote_data(),
     // Skip tickets now live in user_items, see add_user_exchange_medals in migrations.rs
-    AddSingletonItem::new(RemoteDataItemType::Stamina, 419).into_remote_data(),
+    AddSingletonItem::new(RemoteDataItemType::Stamina, wallet.stamina).into_remote_data(),
     AddSingletonItem::new(RemoteDataItemType::Exp, 10).into_remote_data(),
     // AddCharacter::new(8, CharacterParameter { id: 5335218194, character_id: 100, rank: 1, rank_progress: 4, sp_skill: vec![SpSkill { group_id: 10000, id: 100001, lv: 1, is_trial: false }], character_enhance_stage_id_list: vec![0, 0, 0, 0], character_piece_board_stage_id_list: vec![], is_trial: false }).into_remote_data(),
     // AddCharacter::new(10, CharacterParameter { id: 5335220194, character_id: 101, rank: 1, rank_progress: 4, sp_skill: vec![SpSkill { group_id: 10100, id: 101001, lv: 1, is_trial: false }, SpSkill { group_id: 10102, id: 101021, lv: 1, is_trial: false }], character_enhance_stage_id_list: vec![0, 0, 0, 0], character_piece_board_stage_id_list: vec![], is_trial: false }).into_remote_data(),

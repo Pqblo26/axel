@@ -20,6 +20,7 @@ pub mod exchange;
 pub mod expedition;
 pub mod friend;
 pub mod gacha;
+pub mod item_use;
 pub mod home;
 pub mod idlink_confirm_google;
 pub mod interaction;

@@ -1,7 +1,10 @@
 //! Hierarchy is Area (Relic Quest) -> Stage (Eris - Beginner)
 //! Reference: https://youtu.be/S9fX6sbXRHw (also shows character upgrade and promotion)
 
-use crate::api::battle::{apply_reward_multiplier, grant_rewards, make_battle_member_exp_and_character_love};
+use crate::api::battle::{
+  apply_reward_multiplier, grant_rewards, make_battle_member_exp_and_character_love, pay_quest_money,
+};
+use crate::api::quest::stage::stage_info;
 use crate::api::battle_multi::{BattleCharacterLove, BattleClearReward, BattleMemberExp};
 use crate::api::dungeon::BattleSkipReward;
 use crate::api::master_all::{get_master_manager, get_masters};
@@ -191,9 +194,7 @@ pub async fn battle_hunting_start(
   session: Arc<Session>,
   Params(params): Params<BattleHuntingStartRequest>,
 ) -> impl IntoHandlerResponse {
-  warn!(?params, "encountered stub: battle_hunting_start");
-
-  battle::make_battle_start(&state, &session, params.party_id).await
+  battle::make_battle_start(&state, &session, params.party_id, Some((params.quest_id, 1))).await
 }
 
 // See [Wonder_Api_BattlehuntingresultResponseDto_Fields]
@@ -248,27 +249,25 @@ pub async fn battle_hunting_result(
   let mut client = state.get_database_client().await?;
   let transaction = client.transaction().await.context("failed to start transaction")?;
 
-  let rewards = get_master_manager()
-    .get_master("huntingquest_stage_itemreward")
-    .iter()
-    .map(|reward| (reward["id"].as_str().unwrap().parse::<i32>().unwrap(), reward))
-    .collect::<HashMap<_, _>>();
-  let mut rewards = parse_reward_items(rewards[&params.quest_id]);
+  let stage = stage_info(params.quest_id).context("unknown free quest stage")?;
+  let mut rewards = stage.rewards.clone();
   apply_reward_multiplier(&transaction, &session, &mut rewards).await?;
   let update_items = grant_rewards(&transaction, &session, &rewards).await?;
   transaction.commit().await.context("failed to commit transaction")?;
+  let wallet_remote = pay_quest_money(&client, &session, stage.money as i64).await?;
 
   let party = FetchUserParty::new(&client)
     .await?
     .run(session.user_id, params.party_id as i64)
     .await?;
 
-  let (member_exp, love) = make_battle_member_exp_and_character_love(&party, &client, &session).await?;
+  let (member_exp, love) =
+    make_battle_member_exp_and_character_love(&party, &client, &session, stage.intimacy_exp).await?;
   let mut response = CallResponse::new_success(Box::new(BattleHuntingResultResponse {
     limit: 1,
-    exp: 230,
+    exp: stage.player_exp,
     lvup: 0,
-    money: 42000,
+    money: stage.money,
     storyunlock: vec![],
     love,
     // TODO: We must send only members that are used in the party, otherwise hardlock occurs??
@@ -286,6 +285,7 @@ pub async fn battle_hunting_result(
     clearreward: vec![],
   }));
   response.remote.extend(update_items);
+  response.remote.extend(wallet_remote);
   Ok(Unsigned(response))
 }
 
@@ -392,17 +392,5 @@ pub async fn battle_hunting_skip(
   session: Arc<Session>,
   Params(params): Params<BattleHuntingSkipRequest>,
 ) -> impl IntoHandlerResponse {
-  warn!(?params, "encountered stub: battle_hunting_skip");
-
-  Ok(Unsigned(BattleSkipResponse {
-    lvup: 0,
-    reward: vec![BattleSkipReward {
-      dropnum: 1,
-      exp: 500,
-      money: 1000,
-      itemtype: RemoteDataItemType::RealMoney.into(),
-      itemid: 1,
-      itemnum: 5000,
-    }],
-  }))
+  Ok(Unsigned(crate::api::quest::skip::skip_quests(&state, &session, &params.skip).await?))
 }
