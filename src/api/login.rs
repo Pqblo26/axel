@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use jwt_simple::prelude::Serialize;
 use serde::Deserialize;
 use serde_repr::{Deserialize_repr, Serialize_repr};
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use crate::api::NotificationData;
 use crate::build_info::BUILD_INFO;
@@ -190,6 +190,10 @@ pub async fn login(state: Arc<AppState>, Params(params): Params<LoginRequestRequ
   migrations::run_migrations(&session, &mut client).await;
 
   response.add_remote_data(blob::get_login_remote_data(&state, &session).await);
+  match crate::api::present::count_pending_presents(&client, session.user_id).await {
+    Ok(count) => response.add_notifications(vec![crate::api::present::present_badge(count)]),
+    Err(error) => warn!(?error, "failed to count presents for the Gifts badge"),
+  }
   response.add_notifications(vec![
     // Jobs
     NotificationData::new(1, 7, 6, 0, "".to_string(), "".to_string()),
@@ -256,7 +260,7 @@ pub async fn login(state: Arc<AppState>, Params(params): Params<LoginRequestRequ
     // [Wonder.Util.NotificationAnnounceUtil$$ShouldShowUserNews] checks for it
     NotificationData::new(1, 7, 25, 1, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_presentButton], counted
-    NotificationData::new(1, 7, 2, 1, "".to_string(), "".to_string()),
+    // Gifts badge (type 7, key 2) is sent above with the real number of presents
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_missionButton], counted
     NotificationData::new(1, 7, 3, 1, "".to_string(), "".to_string()),
     // See [Wonder.UI.Mypage.MyPageScreen$$UpdateBadgeAll], [_shopButton], [EnableFreeItemFlag], boolean

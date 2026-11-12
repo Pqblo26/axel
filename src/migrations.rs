@@ -44,6 +44,7 @@ pub async fn run_migrations(session: &Session, client: &mut Client) {
       migration!(add_user_member_skills),
       migration!(add_user_home_illustrations),
       migration!(set_user_current_home_member),
+      migration!(add_user_welcome_presents),
     ]
   });
 
@@ -774,4 +775,38 @@ async fn set_user_current_home_member(session: &Session, client: &mut Client) ->
       .context("failed to execute update")
       .unwrap()
   }
+}
+
+/// Puts the welcome presents in the gift box, once per user.
+async fn add_user_welcome_presents(session: &Session, client: &mut Client) -> u64 {
+  #[rustfmt::skip]
+  let statement = match client
+    .prepare(/* language=postgresql */ r#"
+      insert into user_presents (user_id, item_type, item_id, item_num, message, source)
+      values ($1, $2, $3, $4, $5, $6)
+      on conflict (user_id, source) where source is not null do nothing
+    "#)
+    .await
+  {
+    Ok(statement) => statement,
+    Err(error) => {
+      // Most likely migrations/20261112000001_add_user_presents.sql has not been applied yet
+      warn!(?error, "cannot add welcome presents, is the user_presents table missing?");
+      return 0;
+    }
+  };
+
+  let mut rows_modified = 0;
+  for &(source, item_type, item_id, item_num, message) in crate::api::present::WELCOME_PRESENTS {
+    let item_type: i32 = item_type.into();
+    rows_modified += client
+      .execute(
+        &statement,
+        &[&session.user_id, &item_type, &item_id, &item_num, &message, &source],
+      )
+      .await
+      .context("failed to execute query")
+      .unwrap();
+  }
+  rows_modified
 }
