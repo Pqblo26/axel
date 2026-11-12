@@ -29,6 +29,18 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
 - El progreso del menú principal no se guarda.
 - Herramientas propias: **panel web** (Pablo lo quiere) para ver jugadores, tiradas y registros, y editar banners, probabilidades, eventos y personajes.
 
+## Fallos encontrados jugando (2026-11-12)
+
+| # | Fallo | Causa | Arreglo |
+|---|-------|-------|---------|
+| 1 | La portada no muestra el carrusel de eventos ni el botón Events | Los banners de la portada salen del maestro `banner` (1364 filas con `start_at`/`end_at`) y todos caducaron al cerrar el juego. Tampoco hay eventos activos (solo se reactiva el 24011 en `event_config`) | Parchear `banner`/`event_config` en `master_all.rs` para activar los que elijamos (después, desde el panel) |
+| 2 | Regalos: «6» notificaciones, un regalo fijo de 10 000 gemas («skebob») y «Unable to receive: Stamina ×500» | `src/api/present.rs` es un stub: devuelve siempre los mismos datos de ejemplo de Axel y no entrega nada | Buzón de regalos real (tabla, entregar objetos); útil también para el panel |
+| 3 | Note (avisos) en blanco | Dos causas: (a) `static_server.rs` usaba la ruta de la URL en `ServeDir::new` en vez de la carpeta local, así que todo salía del espejo (y `help/` devolvía su listado «Eris»); (b) el WebView (Chromium) rechazaba el certificado autofirmado que hacía de CA y de servidor | **Arreglado** (2026-11-12): `ServeDir::new(local_root)` (en el PR del hilo de fallos) y CA propia (`5ad9c253.0` en MuMu) + certificado de servidor de 397 días. Confirmado en el juego |
+| 4 | Help de Branch en blanco | Igual que el 3 | **Arreglado** con el 3 |
+| 5 | El «+» de gemas se queda cargando | No llega ninguna petición al servidor: el cliente espera a Google Play Billing, que en MuMu no responde | Baja prioridad: en local las gemas se dan por regalos o panel |
+
+Otros stubs vistos en el registro: misiones (`mission_list`, `mission_home`), trabajos/expediciones (`expedition_set`), mini eventos sorpresa, recompensas por anuncios, invitaciones multijugador, vincular cuenta (`idlink_confirm_google`), intercambio (`exchange`) y propuesta de equipo (`party_offer`).
+
 ## Decisiones tomadas
 
 - **2026-11-11 — Axel como base (fork), no solo como referencia.** Ya resuelve el protocolo, la firma JWT RS256 (RSA-1024) y LIAPP; empezar de cero repetiría meses de ingeniería inversa.
