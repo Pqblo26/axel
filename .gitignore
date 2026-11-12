@@ -21,3 +21,6 @@ config/axel.*
 
 # Runtime files
 logs
+
+# Certificados locales de Konofan (setup-wsl.sh)
+certs/
