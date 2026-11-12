@@ -1,10 +1,10 @@
 use anyhow::Context;
 use jwt_simple::prelude::Serialize;
 use rand::seq::IteratorRandom;
-use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -18,7 +18,7 @@ use crate::handler::{IntoHandlerResponse, Unsigned};
 use crate::item::UpdateItemCountBy;
 use crate::member::MemberPrototype;
 use crate::user::session::Session;
-use crate::{master, AppState};
+use crate::{AppState, master};
 
 // See [Wonder_Api_GachaInfoResponseDto_Fields]
 #[derive(Default, Debug, Serialize)]
@@ -1296,22 +1296,33 @@ async fn gacha_impl(
   money_type: i32,
   amount: usize,
 ) -> impl IntoHandlerResponse {
-  let members = get_master_manager().get_master("member");
-  let members = members
-    .iter()
-    .filter(|member| member["rare"].as_str().unwrap().parse::<i32>().unwrap() >= 2)
-    .choose_multiple(&mut rand::rng(), amount)
-    .into_iter()
-    .map(|member| member["id"].as_str().unwrap().parse::<i64>().unwrap())
-    .map(MemberPrototype::load_from_id)
-    .collect::<Vec<_>>();
+  let mut client = state.get_database_client().await.unwrap();
 
-  let members = members
+  let pool = load_draw_pool(&client, gacha_id).await.unwrap();
+  let member_ids = if pool.is_empty() {
+    warn!(
+      ?gacha_id,
+      "no rates in gacha.rates for this gacha, falling back to uniform random pool (import gacha_rates first)"
+    );
+    get_master_manager()
+      .get_master("member")
+      .iter()
+      .filter(|member| member["rare"].as_str().unwrap().parse::<i32>().unwrap() >= 2)
+      .choose_multiple(&mut rand::rng(), amount)
+      .into_iter()
+      .map(|member| member["id"].as_str().unwrap().parse::<i64>().unwrap())
+      .collect::<Vec<_>>()
+  } else {
+    draw_from_pool(&pool, amount, &mut rand::rng())
+  };
+  info!(?gacha_id, ?member_ids, "gacha draw");
+
+  let members = member_ids
     .into_iter()
+    .map(MemberPrototype::load_from_id)
     .map(|prototype| prototype.create_member(prototype.id as i32))
     .collect::<Vec<_>>();
 
-  let mut client = state.get_database_client().await.unwrap();
   let transaction = client.transaction().await.unwrap();
 
   #[rustfmt::skip]
@@ -1390,6 +1401,27 @@ async fn gacha_impl(
     } else {
       response.add_remote_data(AddMember::normal(member.to_member_parameter_wire()).into_remote_data());
     }
+  }
+
+  #[rustfmt::skip]
+  let log_statement = transaction
+    .prepare(/* language=postgresql */ r#"
+      insert into gacha.user_draws (user_id, gacha_id, item_type, item_id, item_num)
+      values ($1, $2, $3, $4, 1)
+    "#)
+    .await
+    .context("failed to prepare statement")
+    .unwrap();
+  let member_item_type: i32 = RemoteDataItemType::Member.into();
+  for member in &members {
+    transaction
+      .execute(
+        &log_statement,
+        &[&session.user_id, &(gacha_id as i64), &member_item_type, &(member.id as i64)],
+      )
+      .await
+      .context("failed to log gacha draw")
+      .unwrap();
   }
 
   transaction.commit().await.unwrap();
@@ -1585,7 +1617,7 @@ pub async fn gacha_rate(state: Arc<AppState>, Params(params): Params<GachaRateRe
       .into_iter()
       .map(|row| GachaRateBonusItem {
         pack_id: row.get("pack_id"),
-        rate: (row.get::<_, Decimal>("rate") * Decimal::from(1000))
+        rate: (row.get::<_, Decimal>("probability") * Decimal::from(1000))
           .round()
           .to_i32()
           .unwrap(),
@@ -1714,8 +1746,176 @@ pub struct GachaRateBonusItem {
 
 impl CallCustom for GachaRate {}
 
-pub async fn gacha_log() -> impl IntoHandlerResponse {
-  Unsigned(json!({
-    "goods":[{"itemtype":4,"itemid":1063113,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1034100,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1152102,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1083110,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1122100,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1093100,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1132100,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1002102,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1282100,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1064217,"itemnum":1,"time":"2024-08-05 15:03:20","gachaid":100002},{"itemtype":4,"itemid":1192102,"itemnum":1,"time":"2024-08-05 20:17:42","gachaid":200021},{"itemtype":4,"itemid":1102102,"itemnum":1,"time":"2024-08-05 20:17:42","gachaid":200021},{"itemtype":4,"itemid":1143127,"itemnum":1,"time":"2024-08-05 20:17:42","gachaid":200021},{"itemtype":4,"itemid":1162100,"itemnum":1,"time":"2024-08-05 20:17:42","gachaid":200021},{"itemtype":4,"itemid":1192102,"itemnum":1,"time":"2024-08-05 20:17:42","gachaid":200021},{"itemtype":4,"itemid":1012100,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1013100,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012100,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1013116,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012102,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012102,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012102,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012100,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1012102,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535},{"itemtype":4,"itemid":1013116,"itemnum":1,"time":"2024-08-07 19:31:30","gachaid":410535}],"status":0,"time":1723059245,"remotedata":[],"notificationdata":[]
-  }))
+/// Draw history shown in the gacha menu. The client shows the most recent entries.
+pub async fn gacha_log(state: Arc<AppState>, session: Arc<Session>) -> impl IntoHandlerResponse {
+  let client = state.get_database_client().await?;
+  #[rustfmt::skip]
+  let statement = client
+    .prepare(/* language=postgresql */ r#"
+      select gacha_id, item_type, item_id, item_num,
+             to_char(drawn_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS') as time
+      from gacha.user_draws
+      where user_id = $1
+      order by drawn_at desc, id desc
+      limit 100
+    "#)
+    .await
+    .context("failed to prepare statement")?;
+  let rows = client
+    .query(&statement, &[&session.user_id])
+    .await
+    .context("failed to execute query")?;
+
+  let goods = rows
+    .into_iter()
+    .map(|row| GachaLogItem {
+      item_type: row.get("item_type"),
+      item_id: row.get("item_id"),
+      item_num: row.get("item_num"),
+      time: row.get("time"),
+      gacha_id: row.get::<_, i64>("gacha_id") as i32,
+    })
+    .collect();
+
+  Ok(Unsigned(GachaAssistLog { goods }))
+}
+
+/// One row of `gacha.rates`, reduced to what is needed to perform a draw.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawPoolEntry {
+  pub member_id: i64,
+  /// Probability for normal draws, in percent (e.g. `0.500` = 0.5%).
+  pub probability: Decimal,
+  /// Probability for the guaranteed 10th draw of a 10x pull ("limitrate" in the client), in percent.
+  pub probability_pity: Option<Decimal>,
+}
+
+/// Loads the draw pool of a gacha from `gacha.rates`.
+/// Rows whose `item_id` is not a member in master data are skipped, so a bad row cannot crash a pull.
+pub async fn load_draw_pool(client: &tokio_postgres::Client, gacha_id: i32) -> anyhow::Result<Vec<DrawPoolEntry>> {
+  #[rustfmt::skip]
+  let statement = client
+    .prepare(/* language=postgresql */ r#"
+      select item_id, probability, probability_pity
+      from gacha.rates
+      where gacha_id = $1
+    "#)
+    .await
+    .context("failed to prepare statement")?;
+  let rows = client
+    .query(&statement, &[&(gacha_id as i64)])
+    .await
+    .context("failed to execute query")?;
+
+  let members = get_master_manager().get_master("member");
+  let known_members = members
+    .iter()
+    .filter_map(|member| member["id"].as_str().and_then(|id| id.parse::<i64>().ok()))
+    .collect::<std::collections::HashSet<_>>();
+
+  Ok(
+    rows
+      .into_iter()
+      .map(|row| DrawPoolEntry {
+        member_id: row.get("item_id"),
+        probability: row.get("probability"),
+        probability_pity: row.get("probability_pity"),
+      })
+      .filter(|entry| {
+        let known = known_members.contains(&entry.member_id);
+        if !known {
+          warn!(
+            ?gacha_id,
+            member_id = entry.member_id,
+            "gacha rate references unknown member, skipping"
+          );
+        }
+        known
+      })
+      .collect(),
+  )
+}
+
+/// Draws `amount` members from the pool, weighted by their probabilities. Duplicates are allowed.
+///
+/// For a 10x pull, the 10th draw uses `probability_pity` (the guaranteed-rarity rates)
+/// if the gacha defines any; otherwise every draw uses the normal rates.
+pub fn draw_from_pool<R: rand::Rng + ?Sized>(pool: &[DrawPoolEntry], amount: usize, rng: &mut R) -> Vec<i64> {
+  use rand::distr::Distribution;
+  use rand::distr::weighted::WeightedIndex;
+
+  // Probabilities have 3 decimal places, so per-mille-of-percent integers are exact.
+  let to_weight = |probability: Decimal| (probability * Decimal::from(1000)).round().to_u32().unwrap_or(0);
+
+  let normal = WeightedIndex::new(pool.iter().map(|entry| to_weight(entry.probability))).ok();
+  let pity = WeightedIndex::new(
+    pool
+      .iter()
+      .map(|entry| entry.probability_pity.map(to_weight).unwrap_or(0)),
+  )
+  .ok();
+
+  (0..amount)
+    .filter_map(|index| {
+      let is_pity_draw = amount == 10 && index == 9;
+      let distribution = if is_pity_draw {
+        pity.as_ref().or(normal.as_ref())
+      } else {
+        normal.as_ref()
+      };
+      distribution.map(|distribution| pool[distribution.sample(rng)].member_id)
+    })
+    .collect()
+}
+
+#[cfg(test)]
+mod draw_tests {
+  use super::*;
+  use rand::SeedableRng;
+  use rand::rngs::StdRng;
+  use std::str::FromStr;
+
+  fn entry(member_id: i64, probability: &str, pity: Option<&str>) -> DrawPoolEntry {
+    DrawPoolEntry {
+      member_id,
+      probability: Decimal::from_str(probability).unwrap(),
+      probability_pity: pity.map(|p| Decimal::from_str(p).unwrap()),
+    }
+  }
+
+  #[test]
+  fn respects_probabilities() {
+    // 5% "rare" vs 95% "common"
+    let pool = vec![entry(1, "5.000", None), entry(2, "95.000", None)];
+    let mut rng = StdRng::seed_from_u64(42);
+    let draws = draw_from_pool(&pool, 100_000, &mut rng);
+    let rare = draws.iter().filter(|&&id| id == 1).count() as f64 / draws.len() as f64;
+    assert!((rare - 0.05).abs() < 0.005, "rare rate was {rare}");
+  }
+
+  #[test]
+  fn tenth_draw_uses_pity_rates() {
+    // Member 1 can only appear on the 10th draw, member 2 never on the 10th draw.
+    let pool = vec![entry(1, "0.000", Some("100.000")), entry(2, "100.000", None)];
+    let mut rng = StdRng::seed_from_u64(7);
+    for _ in 0..100 {
+      let draws = draw_from_pool(&pool, 10, &mut rng);
+      assert_eq!(draws.len(), 10);
+      assert!(draws[..9].iter().all(|&id| id == 2));
+      assert_eq!(draws[9], 1);
+    }
+  }
+
+  #[test]
+  fn without_pity_rates_tenth_draw_uses_normal_rates() {
+    let pool = vec![entry(2, "100.000", None)];
+    let mut rng = StdRng::seed_from_u64(1);
+    assert_eq!(draw_from_pool(&pool, 10, &mut rng), vec![2; 10]);
+  }
+
+  #[test]
+  fn empty_pool_draws_nothing() {
+    let mut rng = StdRng::seed_from_u64(1);
+    assert!(draw_from_pool(&[], 10, &mut rng).is_empty());
+  }
 }
