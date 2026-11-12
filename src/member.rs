@@ -70,7 +70,7 @@ impl MemberPrototype {
         .take_if(|s| *s != "0")
         .map(|s| Arc::new(create_skill(s))),
     ];
-    let passive_skill = member["passiveskill"]
+    let passive_skill = member["passiveskill1"]
       .as_str()
       .take_if(|s| *s != "0")
       .map(|s| PassiveSkillPrototype {
@@ -332,10 +332,11 @@ impl Member {
       luck: self.stats.luck.interpolate(self.level()),
       limit_break: self.promotion_level,
       character_id: self.prototype.character_id,
-      passiveskill: 210201, // self.prototype.passive_skill.as_ref().map_or(0, |skill| skill.id),
-      specialattack: form.specialskill.special_skill_id as i64, // self.prototype.special_attack.as_ref().map_or(0, |skill| skill.id),
-      resist_state: 210201,                                     // self.prototype.resistance_group.id,
-      resist_attr: 150000000,
+      passiveskill: self.prototype.passive_skill.as_ref().map_or(0, |skill| skill.id),
+      specialattack: form.specialskill.special_skill_id as i64,
+      // The member master has no state resistance, only attribute resistance
+      resist_state: 0,
+      resist_attr: self.prototype.resistance_group.id as i64,
       attack: self.stats.attack.interpolate(self.level()),
       ex_flg: 0,
       is_undead: 0,
@@ -372,10 +373,10 @@ impl Member {
       luck: self.stats.luck.interpolate(self.level()),
       limit_break: self.promotion_level,
       character_id: self.prototype.character_id,
-      passiveskill: 210201,  // self.prototype.passive_skill.as_ref().map_or(0, |skill| skill.id),
+      passiveskill: self.prototype.passive_skill.as_ref().map_or(0, |skill| skill.id),
       specialattack: 100001, // self.prototype.special_attack.as_ref().map_or(0, |skill| skill.id),
-      resist_state: 210201,  // self.prototype.resistance_group.id,
-      resist_attr: 150000000,
+      resist_state: 0,
+      resist_attr: self.prototype.resistance_group.id as i64,
       attack: self.stats.attack.interpolate(self.level()),
       ex_flg: 0,
       is_undead: 0,
@@ -442,24 +443,15 @@ impl MinMaxRange {
     Self { min, max }
   }
 
+  /// Stat at a member level. Every member uses the "normal" growth curve, which in the original
+  /// server is min + (max - min) * ((level - 1) / 59) ^ 1.2: this matches the level 3 and 4 members in
+  /// the captured login data (for example Kazuma 1001100 at level 4 has 277 HP: 245 + 1146 * 0.028).
   pub fn interpolate(&self, level: i32) -> i32 {
     const MAX_LEVEL: i32 = 60;
+    const GROWTH_EXPONENT: f64 = 1.2;
 
-    // Used for debugging only, should always be 1.0 in production.
-    const POST_MULTIPLIER: f32 = 20.0;
-    if POST_MULTIPLIER != 1.0 {
-      static WARNED: std::sync::Once = std::sync::Once::new();
-      WARNED.call_once(|| {
-        warn!(
-          "MinMaxRange::interpolate: POST_MULTIPLIER is not 1.0, got {}",
-          POST_MULTIPLIER
-        );
-      });
-    }
-
-    let ratio = (level - 1) as f32 / (MAX_LEVEL - 1) as f32;
-    let interpolated = self.min as f32 + (self.max - self.min) as f32 * ratio;
-    (interpolated * POST_MULTIPLIER).round() as i32
+    let ratio = ((level.clamp(1, MAX_LEVEL) - 1) as f64 / (MAX_LEVEL - 1) as f64).powf(GROWTH_EXPONENT);
+    (self.min as f64 + (self.max - self.min) as f64 * ratio).round() as i32
   }
 }
 
@@ -742,5 +734,21 @@ impl<'a> FetchUserMemberSkillsIn<'a> {
     }
 
     Ok(())
+  }
+}
+
+#[cfg(test)]
+mod stat_curve_tests {
+  use super::MinMaxRange;
+
+  #[test]
+  fn matches_captured_original_stats() {
+    // Kazuma 1001100 level 4 and Iris 1064217 level 3 from src/login-remotedata.json era captures
+    assert_eq!(MinMaxRange::new(245, 1391).interpolate(4), 277);
+    assert_eq!(MinMaxRange::new(252, 1431).interpolate(4), 285);
+    assert_eq!(MinMaxRange::new(247, 1588).interpolate(3), 270);
+    assert_eq!(MinMaxRange::new(245, 1391).interpolate(1), 245);
+    assert_eq!(MinMaxRange::new(245, 1391).interpolate(60), 1391);
+    assert_eq!(MinMaxRange::new(72, 72).interpolate(28), 72);
   }
 }
