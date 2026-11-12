@@ -4,14 +4,15 @@ use rand::seq::IteratorRandom;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::BTreeMap;
+use crate::user::grant::{grant_member, TUTORIAL_GACHA_MEMBERS};
 use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::api::master_all::get_master_manager;
-use crate::api::{NotificationData, RemoteData, RemoteDataCommand, RemoteDataItemType};
-use crate::blob::{AddMember, IntoRemoteData, UpdateMember};
+use crate::api::{NotificationData, RemoteDataItemType};
+use crate::blob::IntoRemoteData;
 use crate::call::{CallCustom, CallResponse};
 use crate::extractor::Params;
 use crate::handler::{IntoHandlerResponse, Unsigned};
@@ -1283,10 +1284,38 @@ pub async fn gacha_tutorial(Params(params): Params<GachaTutorialRequest>) -> imp
   }
 }
 
-pub async fn gacha_tutorial_reward() -> impl IntoHandlerResponse {
+/// The tutorial gacha always gives the same 10 members (src/gacha-tutorial-reward.json). They are
+/// stored once; the response is the captured one with the remote data for what was stored.
+pub async fn gacha_tutorial_reward(state: Arc<AppState>, session: Arc<Session>) -> impl IntoHandlerResponse {
   let response = include_str!("../gacha-tutorial-reward.json");
-  let response: Value = serde_json::from_str(response).unwrap();
-  Unsigned(CallResponse::new_success(Box::new(response)))
+  let mut response: Value = serde_json::from_str(response).unwrap();
+
+  let mut client = state.get_database_client().await?;
+  let transaction = client.transaction().await.context("failed to start transaction")?;
+  #[rustfmt::skip]
+  let already = transaction.query_one(/* language=postgresql */ r#"
+    select exists(select 1 from user_members where user_id = $1 and member_id = $2)
+  "#, &[&session.user_id, &TUTORIAL_GACHA_MEMBERS[0]]).await.context("failed to check tutorial members")?;
+  let mut remote = Vec::new();
+  if !already.get::<_, bool>(0) {
+    for member_id in TUTORIAL_GACHA_MEMBERS {
+      remote.extend(grant_member(&transaction, session.user_id, member_id).await?);
+    }
+  }
+  transaction.commit().await.context("failed to commit transaction")?;
+  info!(granted = !remote.is_empty(), "tutorial gacha reward");
+
+  // Keep only the captured notifications (minus the mission badges, missions are not implemented)
+  let object = response.as_object_mut().context("tutorial reward is not an object")?;
+  object.remove("status");
+  object.remove("time");
+  object.remove("remotedata");
+  if let Some(Value::Array(notifications)) = object.get_mut("notificationdata") {
+    notifications.retain(|n| !(n["type"] == 7 && (n["key"] == 3 || n["key"] == 13)));
+  }
+  let mut response = CallResponse::new_success(Box::new(response));
+  response.remote.extend(remote);
+  Ok(Unsigned(response))
 }
 
 async fn gacha_impl(
@@ -1389,18 +1418,8 @@ async fn gacha_impl(
       response.add_remote_data(item.into_remote_data());
     }
 
-    let rows_affected = transaction
-      .execute(&statement, &[&session.user_id, &(member.id as i64)])
-      .await
-      .context("failed to execute statement")
-      .unwrap();
-    let is_reserve = rows_affected != 0;
-    info!(?member.id, is_reserve, "granted member");
-    if is_reserve {
-      response.add_remote_data(AddMember::reserve(member.to_member_parameter_wire()).into_remote_data());
-    } else {
-      response.add_remote_data(AddMember::normal(member.to_member_parameter_wire()).into_remote_data());
-    }
+    // Also adds the character (new accounts only have their starting characters) and skills
+    response.add_remote_data(grant_member(&transaction, session.user_id, member.id as i64).await.unwrap());
   }
 
   #[rustfmt::skip]

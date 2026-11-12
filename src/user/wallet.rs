@@ -9,12 +9,10 @@ use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use std::sync::OnceLock;
 
-/// Player rank is not stored yet: every account logs in as rank 45 (see blob.rs).
-pub const PLAYER_RANK: i32 = 45;
 /// One stamina point every 3 minutes, as in the original game.
 pub const STAMINA_RECOVER_SECONDS: i64 = 180;
 
-/// Maximum stamina for a player rank, from the "exp" master (rank 45 and above: 200).
+/// Maximum stamina for a player rank, from the "exp" master (10 at rank 1, 200 from rank 41).
 pub fn stamina_max(rank: i32) -> i32 {
   static MAX: OnceLock<Vec<(i32, i32)>> = OnceLock::new();
   let table = MAX.get_or_init(|| {
@@ -44,6 +42,8 @@ pub struct Wallet {
   pub real_money_free: i32,
   pub stamina: i32,
   pub stamina_updated_at: DateTime<Utc>,
+  /// Player rank (from user_progress, not saved here), sets the maximum stamina
+  pub rank: i32,
 }
 
 /// Something could not be paid.
@@ -78,10 +78,11 @@ impl Wallet {
     "#, &[&user_id]).await.context("failed to create wallet")?;
     #[rustfmt::skip]
     let row = client.query_one(/* language=postgresql */ r#"
-      select money, real_money, real_money_free, stamina, stamina_updated_at
-      from user_wallet
-      where user_id = $1
-      for update
+      select w.money, w.real_money, w.real_money_free, w.stamina, w.stamina_updated_at, coalesce(p.rank, 1)
+      from user_wallet w
+        left join user_progress p on p.user_id = w.user_id
+      where w.user_id = $1
+      for update of w
     "#, &[&user_id]).await.context("failed to read wallet")?;
 
     let mut wallet = Self {
@@ -90,6 +91,7 @@ impl Wallet {
       real_money_free: row.get(2),
       stamina: row.get(3),
       stamina_updated_at: row.get(4),
+      rank: row.get(5),
     };
     wallet.recover_stamina(Utc::now());
     Ok(wallet)
@@ -116,7 +118,7 @@ impl Wallet {
   /// Adds the stamina recovered since the last update, up to the maximum for the player rank.
   /// Stamina above the maximum (from items or purchases) is kept but does not recover.
   fn recover_stamina(&mut self, now: DateTime<Utc>) {
-    self.recover_stamina_up_to(now, stamina_max(PLAYER_RANK));
+    self.recover_stamina_up_to(now, self.stamina_max());
   }
 
   fn recover_stamina_up_to(&mut self, now: DateTime<Utc>, max: i32) {
@@ -133,6 +135,19 @@ impl Wallet {
       self.stamina += recovered as i32;
       self.stamina_updated_at += Duration::seconds(recovered * STAMINA_RECOVER_SECONDS);
     }
+  }
+
+  pub fn stamina_max(&self) -> i32 {
+    stamina_max(self.rank)
+  }
+
+  /// After a rank up: stamina is refilled with the new maximum, on top of what is left, like the
+  /// original game.
+  pub fn rank_up(&mut self, new_rank: i32) {
+    self.recover_stamina(Utc::now());
+    self.rank = new_rank;
+    self.stamina = (self.stamina as i64 + self.stamina_max() as i64).min(i32::MAX as i64) as i32;
+    self.stamina_updated_at = Utc::now();
   }
 
   pub fn quartz(&self) -> i64 {
@@ -169,7 +184,7 @@ impl Wallet {
       RemoteDataItemType::RealMoney => self.real_money = clamp(new),
       RemoteDataItemType::RealMoneyFree => self.real_money_free = clamp(new),
       RemoteDataItemType::Stamina => {
-        let max = stamina_max(PLAYER_RANK);
+        let max = self.stamina_max();
         if owned >= max as i64 && new < max as i64 {
           // Recovery starts now that stamina dropped below the maximum
           self.stamina_updated_at = Utc::now();
@@ -245,6 +260,7 @@ mod tests {
       real_money_free: 5,
       stamina,
       stamina_updated_at: now - Duration::seconds(updated_secs_ago),
+      rank: 45,
     }
   }
 

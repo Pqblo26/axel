@@ -1,32 +1,27 @@
 //! Hierarchy is Area (Relic Quest) -> Stage (Eris - Beginner)
 //! Reference: https://youtu.be/S9fX6sbXRHw (also shows character upgrade and promotion)
 
-use crate::api::battle::{
-  apply_reward_multiplier, grant_rewards, make_battle_member_exp_and_character_love, pay_quest_money,
-};
-use crate::api::quest::stage::stage_info;
 use crate::api::battle_multi::{BattleCharacterLove, BattleClearReward, BattleMemberExp};
-use crate::api::dungeon::BattleSkipReward;
-use crate::api::master_all::{get_master_manager, get_masters};
-use crate::api::party_info::{Party, PartyForm, SpecialSkillInfo};
+use crate::api::master_all::get_master_manager;
 use crate::api::quest::parse_reward_items;
 use crate::api::smith_upgrade::{DungeonAreaMaterialInfoResponseDto, FameQuestMaterialInfoResponseDto};
-use crate::api::{battle, MemberFameStats, RemoteDataItemType};
-use crate::blob::IntoRemoteData;
+use crate::api::battle;
 use crate::call::{CallCustom, CallResponse};
 use crate::extractor::Params;
 use crate::handler::{IntoHandlerResponse, Unsigned};
-use crate::item::UpdateItemCountBy;
-use crate::member::{FetchUserMembers, FetchUserParty, Member, MemberActiveSkill, MemberPrototype, MemberStrength};
 use crate::user::session::Session;
 use crate::AppState;
-use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, warn};
-use crate::api::quest::quest_main::BattleSkipResponse;
+use tracing::warn;
+use crate::api::quest::progress::{
+  area_daily_count, group_status, in_date_window, load_progress, open_today, quest_status, stage_unlocked,
+  ProgressMap,
+};
+use crate::api::quest::stage::{stages_of_kind, StageKind};
+use chrono::{DateTime, Utc};
 
 // See [Wonder_Api_QuesthuntinglistResponseDto_Fields]
 #[derive(Debug, Serialize)]
@@ -55,34 +50,84 @@ pub struct HuntingFreeQuest {
   pub status: i32,
 }
 
-pub async fn quest_hunting_list() -> impl IntoHandlerResponse {
-  let masters = get_masters().await;
-  let areas: Vec<Value> = serde_json::from_str(&masters["huntingquest_area"].master_decompressed).unwrap();
+fn row_int(row: &Value, key: &str) -> i32 {
+  row[key].as_str().and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+
+/// Free quest areas open now: permanent ones, the ones for today's day of the week, and none of
+/// the old event areas (their dates are long past, and most only have Japanese names).
+fn open_hunting_areas(now: DateTime<Utc>) -> Vec<&'static Value> {
+  get_master_manager()
+    .get_master("huntingquest_area")
+    .iter()
+    .filter(|area| {
+      in_date_window(
+        area["unlock_date_start"].as_str().unwrap_or("0"),
+        area["unlock_date_end"].as_str().unwrap_or("0"),
+        now,
+      ) && open_today(area, now)
+    })
+    .collect()
+}
+
+/// Daily attempts of a free quest area, 0 = no limit.
+pub fn hunting_area_limit(area_id: i32) -> i32 {
+  get_master_manager()
+    .get_master("huntingquest_area")
+    .iter()
+    .find(|area| row_int(area, "area_id") == area_id)
+    .map(|area| row_int(area, "limit_count"))
+    .unwrap_or(0)
+}
+
+fn hunting_area_status(progress: &ProgressMap, area_id: i32, now: DateTime<Utc>) -> i32 {
+  group_status(
+    stages_of_kind(StageKind::Hunting)
+      .into_iter()
+      .filter(|stage| stage.area_id == area_id)
+      .map(|stage| {
+        if stage_unlocked(stage, progress, now) {
+          quest_status(progress.get(&stage.id))
+        } else {
+          0
+        }
+      }),
+  )
+}
+
+pub async fn quest_hunting_list(state: Arc<AppState>, session: Arc<Session>) -> impl IntoHandlerResponse {
+  let client = state.get_database_client().await?;
+  let progress = load_progress(&client, session.user_id).await?;
+  let now = Utc::now();
+  let areas = open_hunting_areas(now);
 
   Ok(Unsigned(QuestHuntingListResponse {
     limitquests: areas
       .iter()
-      .filter(|area| area.get("type").unwrap().as_str().unwrap() == "LIMITED")
+      .filter(|area| area["type"].as_str() == Some("LIMITED"))
       .map(|area| {
-        let area_id = area.get("area_id").unwrap().as_str().unwrap().parse::<i32>().unwrap();
-
+        let area_id = row_int(area, "area_id");
+        let used = area_daily_count(&progress, StageKind::Hunting, area_id);
         HuntingLimitQuest {
           area_id,
-          status: 0,
-          limit: 1,
+          status: hunting_area_status(&progress, area_id, now),
+          limit: (row_int(area, "limit_count") - used).max(0),
         }
       })
       .collect::<Vec<_>>(),
     freequests: areas
       .iter()
-      .filter(|area| area.get("type").unwrap().as_str().unwrap() == "FREE")
+      .filter(|area| area["type"].as_str() == Some("FREE"))
       .map(|area| {
-        let area_id = area.get("area_id").unwrap().as_str().unwrap().parse::<i32>().unwrap();
-
-        HuntingFreeQuest { area_id, status: 0 }
+        let area_id = row_int(area, "area_id");
+        HuntingFreeQuest {
+          area_id,
+          status: hunting_area_status(&progress, area_id, now),
+        }
       })
       .collect::<Vec<_>>(),
-    enablepackage: true,
+    // Buying more attempts is not implemented
+    enablepackage: false,
   }))
 }
 
@@ -126,30 +171,34 @@ pub struct QuestHuntingStageListRequest {
 }
 
 pub async fn quest_hunting_stage_list(
+  state: Arc<AppState>,
+  session: Arc<Session>,
   Params(params): Params<QuestHuntingStageListRequest>,
 ) -> impl IntoHandlerResponse {
-  let masters = get_masters().await;
-  let stages: Vec<Value> = serde_json::from_str(&masters["huntingquest_stage"].master_decompressed).unwrap();
+  let client = state.get_database_client().await?;
+  let progress = load_progress(&client, session.user_id).await?;
+  let now = Utc::now();
 
-  // TODO: This should probably return remote data or notification data, but I have no dumps for it.
-  //  All stages are locked...
   Ok(Unsigned(QuestHuntingStageListResponse {
-    quests: stages
-      .iter()
-      .filter(|stage| stage.get("area_id").unwrap().as_str().unwrap().parse::<i32>().unwrap() == params.area_id)
-      .map(|stage| HuntingStageQuest {
-        stage_id: stage.get("id").unwrap().as_str().unwrap().parse::<i32>().unwrap(),
-        status: 2,
-        newstage: 0,
-        task1: 1,
-        task2: 1,
-        task3: 1,
+    quests: stages_of_kind(StageKind::Hunting)
+      .into_iter()
+      .filter(|stage| stage.area_id == params.area_id && stage_unlocked(stage, &progress, now))
+      .map(|stage| {
+        let entry = progress.get(&stage.id);
+        let tasks = entry.map(|entry| entry.tasks).unwrap_or_default();
+        HuntingStageQuest {
+          stage_id: stage.id,
+          status: quest_status(entry),
+          newstage: (entry.is_none()) as i32,
+          task1: tasks[0] as i32,
+          task2: tasks[1] as i32,
+          task3: tasks[2] as i32,
+        }
       })
       .collect::<Vec<_>>(),
   }))
 }
 
-// See [Wonder_Api_QuestHuntingLimitStageListResponseDto_Fields]
 #[derive(Debug, Serialize)]
 pub struct QuestHuntingLimitStageListResponse {
   pub quests: Vec<HuntingLimitStageQuest>,
@@ -165,23 +214,22 @@ pub struct HuntingLimitStageQuest {
   pub challenge_count: i32,
 }
 
-pub async fn quest_hunting_limit_stage_list() -> impl IntoHandlerResponse {
-  let masters = get_masters().await;
-  let stages: Vec<Value> = serde_json::from_str(&masters["huntingquest_stage"].master_decompressed).unwrap();
+pub async fn quest_hunting_limit_stage_list(state: Arc<AppState>, session: Arc<Session>) -> impl IntoHandlerResponse {
+  let client = state.get_database_client().await?;
+  let progress = load_progress(&client, session.user_id).await?;
 
   Ok(Unsigned(QuestHuntingLimitStageListResponse {
-    quests: stages
-      .iter()
+    quests: stages_of_kind(StageKind::Hunting)
+      .into_iter()
       .map(|stage| HuntingLimitStageQuest {
-        stage_id: stage.get("stage_id").unwrap().as_str().unwrap().parse::<i32>().unwrap(),
-        challenge_count: 42,
+        stage_id: stage.id,
+        challenge_count: progress.get(&stage.id).map(|entry| entry.daily_count).unwrap_or(0),
       })
       .collect::<Vec<_>>(),
     bonuspack: 0,
   }))
 }
 
-// body={"quest_id": "416055", "party_no": "1"}
 #[derive(Debug, Deserialize)]
 pub struct BattleHuntingStartRequest {
   pub quest_id: i32,
@@ -246,50 +294,31 @@ pub async fn battle_hunting_result(
   session: Arc<Session>,
   Params(params): Params<BattleHuntingResultRequest>,
 ) -> impl IntoHandlerResponse {
-  let mut client = state.get_database_client().await?;
-  let transaction = client.transaction().await.context("failed to start transaction")?;
-
-  let stage = stage_info(params.quest_id).context("unknown free quest stage")?;
-  let mut rewards = stage.rewards.clone();
-  apply_reward_multiplier(&transaction, &session, &mut rewards).await?;
-  let update_items = grant_rewards(&transaction, &session, &rewards).await?;
-  transaction.commit().await.context("failed to commit transaction")?;
-  let wallet_remote = pay_quest_money(&client, &session, stage.money as i64).await?;
-
-  let party = FetchUserParty::new(&client)
-    .await?
-    .run(session.user_id, params.party_id as i64)
-    .await?;
-
-  let (member_exp, love) =
-    make_battle_member_exp_and_character_love(&party, &client, &session, stage.intimacy_exp).await?;
+  let outcome = crate::api::quest::finish::finish_quest_battle(
+    &state,
+    &session,
+    params.quest_id,
+    params.party_id,
+    params.win != 0,
+    &params.clearquestmission,
+  )
+  .await?;
   let mut response = CallResponse::new_success(Box::new(BattleHuntingResultResponse {
-    limit: 1,
-    exp: stage.player_exp,
-    lvup: 0,
-    money: stage.money,
+    limit: outcome.limit,
+    exp: outcome.exp,
+    lvup: outcome.lvup,
+    money: outcome.money,
     storyunlock: vec![],
-    love,
-    // TODO: We must send only members that are used in the party, otherwise hardlock occurs??
-    member_exp,
+    love: outcome.love,
+    member_exp: outcome.member_exp,
     mission: params.clearquestmission,
-    reward: rewards
-      .iter()
-      .map(|item| BattleReward {
-        itemtype: item.item_type,
-        itemid: item.item_id,
-        itemnum: item.item_num,
-        is_rare: item.item_rare,
-      })
-      .collect(),
-    clearreward: vec![],
+    reward: outcome.reward,
+    clearreward: outcome.clearreward,
   }));
-  response.remote.extend(update_items);
-  response.remote.extend(wallet_remote);
+  response.remote.extend(outcome.remote);
   Ok(Unsigned(response))
 }
 
-// See [Wonder_Api_HuntingquestListByItemResponseDto_Fields]
 #[derive(Debug, Serialize)]
 pub struct HuntingQuestListByItemResponse {
   pub huntingquests: Vec<HuntingQuest>,

@@ -51,9 +51,25 @@ pub struct StageInfo {
   /// Times per day it can be played, 0 = no limit
   pub limit: i32,
   pub rewards: Vec<QuestRewardItem>,
+  pub area_id: i32,
+  /// 1 normal, 2 hard, 3 expert
+  pub mode: i32,
+  /// Member experience each main member of the party gets
+  pub member_exp: i32,
+  /// Quest missions (crowns): main mission and the two sub missions
+  pub missions: [i32; 3],
+  /// Reward pack ("pack" master) given the first time each crown is achieved, 0 = none
+  pub crown_packs: [i64; 3],
+  /// Stages that must be cleared first, 0 = none
+  pub unlock_stages: [i32; 2],
+  pub unlock_date_start: String,
 }
 
 fn int(row: &Value, key: &str) -> Option<i32> {
+  row.get(key)?.as_str()?.parse().ok()
+}
+
+fn long(row: &Value, key: &str) -> Option<i64> {
   row.get(key)?.as_str()?.parse().ok()
 }
 
@@ -80,13 +96,46 @@ fn load() -> HashMap<i32, StageInfo> {
         intimacy_exp: int(row, "intimacy_exp").unwrap_or(0),
         limit: int(row, "limit").unwrap_or(0),
         rewards: rewards.get(&id).map(|row| parse_reward_items(row)).unwrap_or_default(),
+        area_id: int(row, "area_id").unwrap_or(0),
+        mode: int(row, "mode").unwrap_or(1),
+        member_exp: int(row, "member_exp").unwrap_or(0),
+        missions: [
+          int(row, "mainmission").unwrap_or(0),
+          int(row, "submission1").unwrap_or(0),
+          int(row, "submission2").unwrap_or(0),
+        ],
+        crown_packs: [
+          long(row, "mainmission_reward1_packid").unwrap_or(0),
+          long(row, "mainmission_reward2_packid").unwrap_or(0),
+          long(row, "mainmission_reward3_packid").unwrap_or(0),
+        ],
+        unlock_stages: [
+          int(row, "unlock_clearstage").unwrap_or(0),
+          int(row, "unlock_clearstage2").unwrap_or(0),
+        ],
+        unlock_date_start: row
+          .get("unlock_date_start")
+          .and_then(|v| v.as_str())
+          .unwrap_or("0")
+          .to_owned(),
       });
     }
   }
   stages
 }
 
-pub fn stage_info(quest_id: i32) -> Option<&'static StageInfo> {
+fn stages() -> &'static HashMap<i32, StageInfo> {
   static STAGES: OnceLock<HashMap<i32, StageInfo>> = OnceLock::new();
-  STAGES.get_or_init(load).get(&quest_id)
+  STAGES.get_or_init(load)
+}
+
+pub fn stage_info(quest_id: i32) -> Option<&'static StageInfo> {
+  stages().get(&quest_id)
+}
+
+/// Stages of one kind, sorted by id.
+pub fn stages_of_kind(kind: StageKind) -> Vec<&'static StageInfo> {
+  let mut list = stages().values().filter(|stage| stage.kind == kind).collect::<Vec<_>>();
+  list.sort_by_key(|stage| stage.id);
+  list
 }
