@@ -17,7 +17,7 @@ use crate::handler::{IntoHandlerResponse, Unsigned};
 use crate::item::UpdateItemCountBy;
 use crate::level::get_member_level_calculator;
 use crate::member::{
-  materialize_member_row, materialize_member_row_impl, FetchUserMemberSkillsIn, FetchUserMembers, FetchUserMembersIn, Member,
+  materialize_member_row, materialize_member_row_impl, FetchUserMemberSkillsIn, FetchUserMembers, FetchUserMembersIn, FetchUserParty, Member,
   MemberActiveSkill,
   MemberPrototype, MemberStrength, OptionallyFetched,
 };
@@ -302,28 +302,120 @@ pub async fn update_party_form(
 /// "Tool" -> "Suggest": builds the strongest team from the user's members. The five strongest
 /// members (one per character) go in front, and the next strongest fill the sub slots, without
 /// repeating a character in the team. Weapons and accessories are kept.
+/// Elements of a member: the attributes of its skills ("fire", "water", "thunder", "earth", "wind",
+/// "light", "cursed"), as the game's Suggest filter names them.
+fn member_elements(member: &crate::member::Member) -> Vec<String> {
+  let skills = get_master_manager().get_master("skill_ac");
+  member
+    .prototype
+    .active_skills
+    .iter()
+    .flatten()
+    .filter_map(|skill| {
+      skills
+        .iter()
+        .find(|row| row["skill_id"].as_str().and_then(|id| id.parse::<i64>().ok()) == Some(skill.id))
+        .and_then(|row| row["skill_attribute"].as_str())
+        .filter(|attribute| *attribute != "0")
+        .map(str::to_owned)
+    })
+    .collect()
+}
+
+/// Value of the stat chosen in Suggest's "Preferred Stats" ("strength" is Power).
+fn suggest_stat(member: &crate::member::Member, stat: &str) -> i64 {
+  let level = member.level();
+  let stats = &member.stats;
+  (match stat {
+    "hp" => stats.hp.interpolate(level),
+    "attack" => stats.attack.interpolate(level),
+    "magicattack" => stats.attack_magic.interpolate(level),
+    "defense" | "defence" => stats.defense.interpolate(level),
+    "magicdefense" | "magicdefence" => stats.defense_magic.interpolate(level),
+    _ => return member.main_strength_value() as i64,
+  }) as i64
+}
+
+// party_no=1
+// elemental=["wind","cursed"]  (up to two, "none" = empty)
+// priority_status=strength|hp|attack|magicattack|defense|...
+// main=1, sub=1, equip=1, assist=1, trial=1  ("Party Formation" checkboxes)
+/// "Tool" -> "Suggest" button: fills the team with the best members for the chosen elements and
+/// stat, one per character, only in the slots the player's rank has unlocked.
 pub async fn party_offer(state: Arc<AppState>, request: ApiRequest, session: Arc<Session>) -> impl IntoHandlerResponse {
-  let party_no: i64 = request.body["party_no"].parse().context("bad party_no")?;
+  let body = &request.body;
+  let party_no: i64 = body["party_no"].parse().context("bad party_no")?;
+  let elements: Vec<String> = body
+    .get("elemental")
+    .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+    .unwrap_or_default()
+    .into_iter()
+    .filter(|element| element != "none" && !element.is_empty())
+    .collect();
+  let stat = body.get("priority_status").cloned().unwrap_or_else(|| "strength".to_owned());
+  let flag = |key: &str| body.get(key).map(|value| value != "0").unwrap_or(true);
+  let (fill_main, fill_sub) = (flag("main"), flag("sub"));
 
   let mut client = state.get_database_client().await?;
-  let mut members = FetchUserMembers::new(&client).await?.run(session.user_id).await?;
-  members.sort_by_key(|member| std::cmp::Reverse(member.main_strength_value()));
+  let progress = crate::user::progress::PlayerProgress::load(&client, session.user_id).await?;
+  let mut party = FetchUserParty::new(&client).await?.run(session.user_id, party_no).await?;
+  let open_forms = if progress.rank >= crate::user::progress::content_unlock_rank("BACKPARTY") { 5 } else { 3 };
+  let subs_open = progress.rank >= crate::user::progress::content_unlock_rank("SUBPARTY");
 
+  // Members of the chosen elements first, then by the chosen stat
+  let mut members = FetchUserMembers::new(&client).await?.run(session.user_id).await?;
+  members.sort_by_cached_key(|member| {
+    let matches = !elements.is_empty() && member_elements(member).iter().any(|element| elements.contains(element));
+    (std::cmp::Reverse(matches), std::cmp::Reverse(suggest_stat(member, &stat)))
+  });
+
+  // Members kept in place (unticked boxes) keep their character taken
   let mut used_characters = std::collections::HashSet::new();
-  let mut picked = Vec::new();
-  for member in &members {
-    if picked.len() == 15 {
-      break;
+  let character_of = |id: i32| members.iter().find(|member| member.id == id).map(|member| member.prototype.character_id);
+  for (index, form) in party.party_forms.iter_mut().enumerate() {
+    if index >= open_forms {
+      form.main = 0;
     }
-    if used_characters.insert(member.prototype.character_id) {
-      picked.push(member.id as i64);
+    if index >= open_forms || !subs_open {
+      form.sub1 = 0;
+      form.sub2 = 0;
+    }
+    if fill_main {
+      form.main = 0;
+    }
+    if fill_sub {
+      form.sub1 = 0;
+      form.sub2 = 0;
+    }
+    for id in [form.main, form.sub1, form.sub2] {
+      if let Some(character) = character_of(id) {
+        used_characters.insert(character);
+      }
     }
   }
-  // Slots: 5 mains first, then the subs of form 1, 2... in order
-  let slot = |index: usize| picked.get(index).copied().unwrap_or(0);
+  let mut candidates = members
+    .iter()
+    .filter(|member| used_characters.insert(member.prototype.character_id))
+    .map(|member| member.id);
+
+  // Mains first, then the subs of each formation in order
+  if fill_main {
+    for form in party.party_forms.iter_mut().take(open_forms) {
+      form.main = candidates.next().unwrap_or(0);
+    }
+  }
+  if fill_sub && subs_open {
+    for form in party.party_forms.iter_mut().take(open_forms) {
+      if form.main == 0 {
+        continue;
+      }
+      form.sub1 = candidates.next().unwrap_or(0);
+      form.sub2 = candidates.next().unwrap_or(0);
+    }
+  }
 
   let transaction = client.transaction().await.context("failed to start transaction")?;
-  for form in 0..5usize {
+  for form in &party.party_forms {
     #[rustfmt::skip]
     transaction.execute(/* language=postgresql */ r#"
       update user_party_forms
@@ -332,14 +424,14 @@ pub async fn party_offer(state: Arc<AppState>, request: ApiRequest, session: Arc
     "#, &[
       &session.user_id,
       &party_no,
-      &(form as i64 + 1),
-      &slot(form),
-      &slot(5 + form * 2),
-      &slot(6 + form * 2),
+      &(form.form_no as i64),
+      &(form.main as i64),
+      &(form.sub1 as i64),
+      &(form.sub2 as i64),
     ]).await.context("failed to update party form")?;
   }
   transaction.commit().await.context("failed to commit transaction")?;
-  info!(?party_no, ?picked, "party suggested");
+  info!(?party_no, ?elements, ?stat, rank = progress.rank, forms = ?party.party_forms.iter().map(|form| (form.main, form.sub1, form.sub2)).collect::<Vec<_>>(), "party suggested");
 
   // Response is identical to party_info
   Ok(party_info(state, session).await)

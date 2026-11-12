@@ -27,6 +27,17 @@ fn rank_table() -> &'static [(i32, i32)] {
   })
 }
 
+/// Player rank that unlocks a part of the game (master `content_release`, e.g. "SUBPARTY",
+/// "BACKPARTY", "DUNGEON"). 0 if it is not locked by rank.
+pub fn content_unlock_rank(content: &str) -> i32 {
+  get_master_manager()
+    .get_master("content_release")
+    .iter()
+    .find(|row| row["content"].as_str() == Some(content))
+    .and_then(|row| row["player_rank"].as_str()?.parse().ok())
+    .unwrap_or(0)
+}
+
 pub fn max_rank() -> i32 {
   rank_table().last().map(|(rank, _)| *rank).unwrap_or(1)
 }

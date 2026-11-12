@@ -39,6 +39,49 @@ pub struct Party {
 }
 
 impl Party {
+  /// Every member in the party, main and sub members, without empty slots or repeats. The battle
+  /// needs the data of all of them: a sub member missing from the battle members makes the game
+  /// fail with "Data Load Failed".
+  pub fn member_ids(&self) -> Vec<i64> {
+    let mut ids = Vec::new();
+    for form in &self.party_forms {
+      for id in [form.main, form.sub1, form.sub2] {
+        if id != 0 && !ids.contains(&(id as i64)) {
+          ids.push(id as i64);
+        }
+      }
+    }
+    ids
+  }
+
+  /// Empties the slots the player's rank has not unlocked yet: sub members before rank 5 and the
+  /// two rear formations before rank 8 (master `content_release`). The game hides them, so the
+  /// battle must not use them either.
+  pub fn restrict_to_rank(&mut self, rank: i32) {
+    let subs_unlocked = rank >= crate::user::progress::content_unlock_rank("SUBPARTY");
+    let rear_unlocked = rank >= crate::user::progress::content_unlock_rank("BACKPARTY");
+    for (index, form) in self.party_forms.iter_mut().enumerate() {
+      if index >= 3 && !rear_unlocked {
+        form.main = 0;
+        form.weapon = 0;
+        form.acc = 0;
+      }
+      if (index >= 3 && !rear_unlocked) || !subs_unlocked {
+        form.sub1 = 0;
+        form.sub2 = 0;
+      }
+    }
+  }
+
+  /// The formation a member is in, as main or sub member.
+  pub fn form_of(&self, member_id: i32) -> Option<&PartyForm> {
+    self
+      .party_forms
+      .iter()
+      .find(|form| form.main == member_id)
+      .or_else(|| self.party_forms.iter().find(|form| form.sub1 == member_id || form.sub2 == member_id))
+  }
+
   pub fn new(party_forms: [PartyForm; 5], party_no: i32) -> Self {
     Self {
       party_forms,

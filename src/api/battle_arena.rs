@@ -495,17 +495,14 @@ pub async fn score_challenge_start(
   "#, &[&session.user_id, &params.quest_id, &is_practice]).await.context("failed to save arena run")?;
   info!(quest_id = params.quest_id, is_practice, "arena battle started");
 
-  let party = FetchUserParty::new(&client)
-    .await?
-    .run(session.user_id, params.party_id as i64)
-    .await?;
+  let party = crate::api::battle::fetch_battle_party(&client, session.user_id, params.party_id as i64).await?;
 
   // We must send only members that are used in the party, otherwise hardlock occurs
   let fetch_members = FetchUserMembersIn::new(&client).await?;
   #[rustfmt::skip]
   let mut members = fetch_members.run(
     session.user_id,
-    &party.party_forms.iter().map(|form| form.main as i64).collect::<Vec<_>>(),
+    &party.member_ids(),
   ).await?;
   FetchUserMemberSkillsIn::new(&client)
     .await?
@@ -517,7 +514,7 @@ pub async fn score_challenge_start(
     members: members
       .into_iter()
       .filter_map(|member| {
-        let form = party.party_forms.iter().find(|form| form.main == member.id)?;
+        let form = party.form_of(member.id)?;
         Some(member.to_battle_member(form))
       })
       .collect(),

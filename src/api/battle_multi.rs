@@ -297,17 +297,14 @@ pub async fn marathon_multi_start(
 
   let client = state.pool.get().await.context("failed to get database connection")?;
 
-  let party = FetchUserParty::new(&client)
-    .await?
-    .run(session.user_id, params.party_id as i64)
-    .await?;
+  let party = crate::api::battle::fetch_battle_party(&client, session.user_id, params.party_id as i64).await?;
 
   // We must send only members that are used in the party, otherwise hardlock occurs
   let fetch_members = FetchUserMembersIn::new(&client).await.unwrap();
   #[rustfmt::skip]
   let mut members = fetch_members.run(
     session.user_id,
-    &party.party_forms.iter().map(|form| form.main as i64).collect::<Vec<_>>(),
+    &party.member_ids(),
   ).await.unwrap();
   FetchUserMemberSkillsIn::new(&client)
     .await?
@@ -354,10 +351,7 @@ pub async fn marathon_multi_start(
     // We must send only members that are used in the party, otherwise hardlock occurs
     members: members
       .into_iter()
-      .map(|member| {
-        let form = party.party_forms.iter().find(|form| form.main == member.id).unwrap();
-        member.to_battle_member(form)
-      })
+      .filter_map(|member| Some(member.to_battle_member(party.form_of(member.id)?)))
       .collect(),
     battle_id: 1,
     will_use_ticket: 1,
