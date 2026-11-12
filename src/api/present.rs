@@ -53,7 +53,7 @@ pub async fn count_pending_presents<'a>(
 }
 
 /// How a present is granted when accepted.
-enum Grant {
+pub(crate) enum Grant {
   /// Currencies and other values the client keeps as a single number (quartz, eris, stamina...).
   /// The server does not store them yet (they are reset on login), the client adds the amount itself.
   Singleton,
@@ -63,7 +63,7 @@ enum Grant {
   Unsupported,
 }
 
-fn grant_kind(item_type: RemoteDataItemType) -> Grant {
+pub(crate) fn grant_kind(item_type: RemoteDataItemType) -> Grant {
   use RemoteDataItemType::*;
   match item_type {
     Money | RealMoney | RealMoneyFree | Stamina => Grant::Singleton,

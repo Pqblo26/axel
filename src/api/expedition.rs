@@ -1,17 +1,54 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::Context;
+use chrono::{DateTime, Utc};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::AppState;
+use crate::api::RemoteDataItemType;
 use crate::api::interaction::Character;
-use crate::api::master_all::get_masters;
-use crate::call::CallCustom;
+use crate::api::master_all::get_master_manager;
+use crate::blob::IntoRemoteData;
+use crate::call::{CallCustom, CallResponse};
+use crate::database::QueryExecutor;
 use crate::extractor::Params;
-use crate::handler::{IntoHandlerResponse, Unsigned};
+use crate::handler::{IntoHandlerResponse, Signed, Unsigned};
+use crate::item::UpdateItemCountBy;
+use crate::user::id::UserId;
 use crate::user::session::Session;
+
+/// One reward "count" every 864 seconds, see [Wonder.UI.Data.ExpeditionData$$IsReward].
+const SECONDS_PER_COUNT: i64 = 864;
+/// `expedition_count` master stops giving rewards at count 51, so 50 counts (12 hours) is the maximum.
+const MAX_COUNTS: i64 = 50;
+
+/// Format used by the client for `starttime`.
+fn format_time(time: DateTime<Utc>) -> String {
+  time.format("%Y/%m/%d %H:%M").to_string()
+}
+
+fn counts_since(started_at: DateTime<Utc>) -> i64 {
+  ((Utc::now() - started_at).num_seconds() / SECONDS_PER_COUNT).clamp(0, MAX_COUNTS)
+}
+
+/// Whether any job has reached the maximum, used for the Jobs button badge.
+pub async fn any_expedition_complete<'a>(
+  executor: impl Into<QueryExecutor<'a>>,
+  user_id: UserId,
+) -> anyhow::Result<bool> {
+  let executor = executor.into();
+  #[rustfmt::skip]
+  let row = executor.client().query_one(/* language=postgresql */ r#"
+    select exists(
+      select 1 from user_expeditions
+      where user_id = $1 and started_at <= now() - make_interval(secs => $2)
+    )
+  "#, &[&user_id, &((SECONDS_PER_COUNT * MAX_COUNTS) as f64)]).await?;
+  Ok(row.get(0))
+}
 
 // See [Wonder_Api_ExpeditiontopResponseDto_Fields]
 #[derive(Debug, Serialize)]
@@ -43,41 +80,53 @@ pub struct ExpeditionInfo {
 }
 
 // Reference: https://youtu.be/yhJJ8oCST-4
-pub async fn expedition_top() -> impl IntoHandlerResponse {
-  let masters = get_masters().await;
-  let expeditions: Vec<Value> = serde_json::from_str(&masters["expedition"].master_decompressed).unwrap();
+pub async fn expedition_top(state: Arc<AppState>, session: Arc<Session>) -> impl IntoHandlerResponse {
+  let client = state.get_database_client().await?;
+  #[rustfmt::skip]
+  let rows = client.query(/* language=postgresql */ r#"
+    select expedition_id, character_id, started_at
+    from user_expeditions
+    where user_id = $1
+  "#, &[&session.user_id]).await.context("failed to fetch expeditions")?;
+  let working = rows
+    .iter()
+    .map(|row| {
+      let expedition_id: i32 = row.get("expedition_id");
+      let character_id: i64 = row.get("character_id");
+      let started_at: DateTime<Utc> = row.get("started_at");
+      (expedition_id, (character_id, started_at))
+    })
+    .collect::<BTreeMap<_, _>>();
 
-  Ok(Unsigned(ExpeditionTop {
-    expeditions: vec![
-      ExpeditionInfo {
-        expedition_id: 4,
+  let expeditions = get_master_manager()
+    .get_master("expedition")
+    .iter()
+    .filter(|expedition| expedition["enable"].as_str() == Some("1"))
+    .filter_map(|expedition| expedition["expedition_id"].as_str()?.parse::<i32>().ok())
+    .map(|expedition_id| match working.get(&expedition_id) {
+      Some(&(character_id, started_at)) => ExpeditionInfo {
+        expedition_id,
+        character_id,
+        status: if counts_since(started_at) >= MAX_COUNTS { 3 } else { 1 },
+        start_time: format_time(started_at),
+      },
+      None => ExpeditionInfo {
+        expedition_id,
         character_id: 0,
         status: 2,
         start_time: "".to_string(),
       },
-      ExpeditionInfo {
-        expedition_id: 1,
-        character_id: 101,
-        status: 1,
-        start_time: "2025/12/23 12:00".to_string(),
-      },
-      ExpeditionInfo {
-        expedition_id: 2,
-        character_id: 102,
-        status: 3,
-        start_time: "2025/12/23 13:00".to_string(),
-      },
-    ],
-    // expeditions: expeditions
-    // .iter()
-    // .map(|expedition| ExpeditionInfo {
-    //   expedition_id: expedition["expedition_id"].as_str().unwrap().parse().unwrap(),
-    //   character_id: 102,
-    //   start_time: "".to_string(),
-    // })
-    // .collect(),
-    bonus_pack: 1,
-  }))
+    })
+    .collect();
+
+  Ok(Signed(
+    ExpeditionTop {
+      expeditions,
+      // 1 shows "2x Job Rewards currently applied"; rewards are not doubled, so keep it off
+      bonus_pack: 0,
+    },
+    session,
+  ))
 }
 
 // See [Wonder_Api_ExpeditioncharacterResponseDto_Fields]
@@ -181,26 +230,160 @@ pub struct ExpeditionSetRequest {
 
 /// Called when either assigning a character or claiming rewards.
 /// If claiming rewards, "Job Payment Received" popup is always shown even if [ExpeditionSet.items] is empty.
-pub async fn expedition_set(Params(params): Params<ExpeditionSetRequest>) -> impl IntoHandlerResponse {
-  warn!(?params, "encountered stub: expedition_set");
+///
+/// - `expedition_id = 0, user_character_id = 0`: "Accept All", claims every job and keeps the characters working.
+/// - job without a character: assigns `user_character_id` to it.
+/// - job with a character: claims its rewards; the job keeps going with `user_character_id`
+///   (or is left empty if it is 0).
+pub async fn expedition_set(
+  state: Arc<AppState>,
+  session: Arc<Session>,
+  Params(params): Params<ExpeditionSetRequest>,
+) -> impl IntoHandlerResponse {
+  let mut client = state.get_database_client().await?;
+  let transaction = client.transaction().await.context("failed to start transaction")?;
 
-  Ok(Unsigned(ExpeditionSet {
-    updates: vec![
-      // ExpeditionUpdate {
-      //   expedition_id: 4,
-      //   user_character_id: 102,
-      //   love: 5,
-      //   start_time: "2025/12/23 13:00".to_string(),
-      // }
-    ],
-    // - "[...] so I owe nearly 100,000 eris in this bar!"
-    money: -100_000,
-    items: vec![
-      // ExpeditionItem {
-      //   item_type: RemoteDataItemType::Money.into(),
-      //   item_id: 1,
-      //   item_num: 42,
-      // }
-    ],
-  }))
+  #[rustfmt::skip]
+  let rows = transaction.query(/* language=postgresql */ r#"
+    select expedition_id, character_id, started_at
+    from user_expeditions
+    where user_id = $1 and ($2 = 0 or expedition_id = $2)
+    for update
+  "#, &[&session.user_id, &params.expedition_id]).await.context("failed to fetch expeditions")?;
+
+  let masters = get_master_manager();
+  let mut updates = Vec::new();
+  let mut money = 0;
+  let mut items: BTreeMap<(i32, i64), i32> = BTreeMap::new();
+  let mut intimacy: BTreeMap<i64, i32> = BTreeMap::new();
+
+  if rows.is_empty() && params.expedition_id != 0 && params.user_character_id != 0 {
+    // Assign a character to an empty job
+    #[rustfmt::skip]
+    transaction.execute(/* language=postgresql */ r#"
+      insert into user_expeditions (user_id, expedition_id, character_id, started_at)
+      values ($1, $2, $3, now())
+    "#, &[&session.user_id, &params.expedition_id, &(params.user_character_id as i64)]).await
+      .context("failed to assign expedition")?;
+    info!(?params, "character assigned to job");
+    updates.push(ExpeditionUpdate {
+      expedition_id: params.expedition_id,
+      user_character_id: params.user_character_id,
+      love: 0,
+      start_time: format_time(Utc::now()),
+    });
+  }
+
+  for row in &rows {
+    let expedition_id: i32 = row.get("expedition_id");
+    let character_id: i64 = row.get("character_id");
+    let started_at: DateTime<Utc> = row.get("started_at");
+    let counts = counts_since(started_at);
+
+    // Money and affinity per count, from the `expedition_count` master
+    for entry in masters.get_master("expedition_count") {
+      let field = |name: &str| entry[name].as_str().and_then(|value| value.parse::<i64>().ok()).unwrap_or(0);
+      if field("expedition_id") != expedition_id as i64 {
+        continue;
+      }
+      // Rows are "from count N on, give X": only the first row (count 1) gives anything.
+      if field("count_money") == 1 {
+        money += (field("money") * counts) as i32;
+      }
+      if field("count_intimacy") == 1 {
+        *intimacy.entry(character_id).or_default() += (field("intimacy") * counts) as i32;
+      }
+    }
+
+    // One item roll per count, weighted by `expedition_drop`
+    let drops = masters
+      .get_master("expedition_drop")
+      .iter()
+      .filter(|drop| drop["expedition_id"].as_str() == Some(&expedition_id.to_string()))
+      .filter_map(|drop| {
+        let field = |name: &str| drop[name].as_str()?.parse::<i64>().ok();
+        Some((field("lv1_item_type")? as i32, field("lv1_item_id")?, field("lv1_item_num")? as i32, field("lv1_weight")?))
+      })
+      .filter(|&(item_type, _, _, weight)| item_type != 0 && weight > 0)
+      .collect::<Vec<_>>();
+    let total_weight: i64 = drops.iter().map(|drop| drop.3).sum();
+    if total_weight > 0 {
+      let mut rng = rand::rng();
+      for _ in 0..counts {
+        let mut roll = rng.random_range(0..total_weight);
+        for &(item_type, item_id, item_num, weight) in &drops {
+          if roll < weight {
+            *items.entry((item_type, item_id)).or_default() += item_num;
+            break;
+          }
+          roll -= weight;
+        }
+      }
+    }
+
+    // Keep working (same or new character) or leave the job empty
+    let new_character = if params.expedition_id == 0 {
+      character_id
+    } else {
+      params.user_character_id as i64
+    };
+    if new_character == 0 {
+      #[rustfmt::skip]
+      transaction.execute(/* language=postgresql */ r#"
+        delete from user_expeditions where user_id = $1 and expedition_id = $2
+      "#, &[&session.user_id, &expedition_id]).await.context("failed to clear expedition")?;
+    } else {
+      #[rustfmt::skip]
+      transaction.execute(/* language=postgresql */ r#"
+        update user_expeditions
+        set character_id = $3, started_at = now()
+        where user_id = $1 and expedition_id = $2
+      "#, &[&session.user_id, &expedition_id, &new_character]).await.context("failed to restart expedition")?;
+    }
+    updates.push(ExpeditionUpdate {
+      expedition_id,
+      user_character_id: new_character as i32,
+      love: intimacy.get(&character_id).copied().unwrap_or(0),
+      start_time: format_time(Utc::now()),
+    });
+    info!(?expedition_id, ?character_id, ?counts, "job rewards claimed");
+  }
+
+  // Affinity
+  for (&character_id, &amount) in &intimacy {
+    #[rustfmt::skip]
+    transaction.execute(/* language=postgresql */ r#"
+      update user_characters set intimacy = intimacy + $3
+      where user_id = $1 and character_id = $2
+    "#, &[&session.user_id, &character_id, &amount]).await.context("failed to add affinity")?;
+  }
+
+  // Items
+  let update_items = UpdateItemCountBy::new(&transaction).await?;
+  let mut response_items = Vec::new();
+  let mut remote = Vec::new();
+  for (&(item_type, item_id), &item_num) in &items {
+    let item = update_items
+      .run(session.user_id, (RemoteDataItemType::from(item_type), item_id), item_num)
+      .await
+      .context("failed to grant job reward")?;
+    remote.extend(item.into_remote_data());
+    response_items.push(ExpeditionItem {
+      item_type,
+      item_id,
+      item_num,
+    });
+  }
+  // Eris go in `money` (shown with the items); they are not stored server-side yet.
+
+  transaction.commit().await.context("failed to commit transaction")?;
+  info!(?money, ?items, ?intimacy, "job rewards");
+
+  let mut response = CallResponse::new_success(Box::new(ExpeditionSet {
+    updates,
+    money,
+    items: response_items,
+  }));
+  response.add_remote_data(remote);
+  Ok(Signed(response, session))
 }

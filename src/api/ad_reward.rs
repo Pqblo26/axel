@@ -79,6 +79,8 @@ pub async fn shop_item_list(Params(params): Params<ShopItemListRequest>) -> impl
     items: shop_items
       .iter()
       .filter(|item| item["shop_id"].as_str().unwrap().parse::<i32>().unwrap() == params.shop_master_id)
+      // Real-money items need Google Play Billing, which hangs the Shop (see patch_master "shop_item")
+      .filter(|item| matches!(item["google_yen_price"].as_str(), None | Some("0") | Some("")))
       .map(|item| ShopItem {
         shop_item_master_id: item["id"].as_str().unwrap().parse().unwrap(),
         interval_time: 0,

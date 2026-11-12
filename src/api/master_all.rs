@@ -303,16 +303,24 @@ async fn patch_master(name: &str, value: &mut Value) {
       }
     }
     "shop_item" => {
+      // Items paid with real money (they have a Google Play price) make the client wait for Google Play
+      // Billing, which never answers without the official store, so the Shop hangs on "Now Loading".
+      // Only items bought with in-game currency or free are made available; the rest stay expired.
       info!("patching shop_item");
       if let Some(array) = value.as_array_mut() {
         for item in array {
           if let Some(item) = item.as_object_mut() {
-            if let Some(start_at_value) = item.get_mut("start_at") {
-              *start_at_value = Value::String(start_at_str.clone());
-            }
-            if let Some(end_at_value) = item.get_mut("end_at") {
-              *end_at_value = Value::String(end_at_str.clone());
-            }
+            let real_money = item
+              .get("google_yen_price")
+              .and_then(|price| price.as_str())
+              .is_some_and(|price| price != "0" && !price.is_empty());
+            let (start_at, end_at) = if real_money {
+              ("2000/1/1 0:00".to_owned(), "2000/1/2 0:00".to_owned())
+            } else {
+              (start_at_str.clone(), end_at_str.clone())
+            };
+            item.insert("start_at".to_owned(), Value::String(start_at));
+            item.insert("end_at".to_owned(), Value::String(end_at));
           }
         }
       }

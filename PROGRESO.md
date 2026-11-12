@@ -23,12 +23,17 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
   - Buzón de regalos real: tabla `user_presents`, contador correcto en Gifts, historial (Gift Log), regalo de bienvenida una vez por jugador y `scripts/konofan/enviar-regalo.sh` para mandar regalos. Miembros/armas/accesorios aún no se pueden regalar.
   - Anuncios propios en Note: tabla `news` y páginas de detalle en `/static/news/<id>.html`.
   - Los recursos locales (`resources-root`, `/srv/konofd`) por fin se usan: `serve_dir_with_fallback` servía desde la ruta de la URL y todo acababa yendo al espejo.
+- **Segunda tanda de arreglos** (2026-11-12):
+  - Jobs (expediciones) reales: tabla `user_expeditions`; cada 864 s un «turno» (máx. 50, 12 h) con 400 eris, 2 de afinidad y una tirada de `expedition_drop`; Accept All, asignar y quitar personaje.
+  - Exchange real: cobra las medallas (primer canje con precio `_first`), da el contenido del pack y respeta los límites (NUM/MONTH/WEEK, tabla `user_exchanges`). Las medallas de diosa y los tickets de salto pasan a `user_items` (antes se sumaban en cada login sin guardarse).
+  - Rombos rojos: el servidor ya no manda avisos de «nuevo» fijos a 1; el de Jobs se calcula (algún trabajo al máximo).
+  - Shop: los productos de pago real (con precio de Google Play) se quedan caducados para que la tienda no espere a Google Play Billing; solo quedan los gratis.
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
 ## Qué falta
 
-- Note y Help (WebView) salen en blanco hasta que el WebView acepte el certificado (CA propia + certificado de servidor corto, en curso en la rama de instalación).
 - El **+ de las gemas** se queda cargando: el juego espera a Google Play Billing y la petición nunca llega al servidor. Solo se arregla en el cliente; de momento, gemas por el buzón.
+- Miembros, armas y accesorios no se pueden dar desde regalos ni canjes todavía.
 - Las monedas (gemas, eris, estamina) no se guardan en la base de datos: se fijan en cada login (`src/blob.rs`).
 - El gacha no cobra gemas/tickets (`money_type` se ignora).
 - Los banners están escritos a mano en `gacha_info()` (`src/api/gacha.rs`); hay que pasarlos a la base de datos para poder editarlos.
