@@ -1,4 +1,4 @@
-use crate::call::CallCustom;
+use crate::call::{CallCustom, CallResponse};
 use crate::extractor::Params;
 use crate::handler::{IntoHandlerResponse, Signed, Unsigned};
 use crate::user::session::Session;
@@ -106,22 +106,26 @@ pub async fn home(state: Arc<AppState>, session: Arc<Session>) -> impl IntoHandl
     );
   }
 
-  Ok(Signed(
-    Home {
-      multi_battle_invitation: None,
-      member_info: MemberInfo {
-        current_member_id: home_current_illustration_id,
-        member_ids: members,
-      },
-      advertisement_data: AdvertisementData {
-        id: 10006,
-        reward_type: 1,
-        status: 0,
-      },
-      display_plan_map: false,
+  let mut response = CallResponse::new_success(Box::new(Home {
+    multi_battle_invitation: None,
+    member_info: MemberInfo {
+      current_member_id: home_current_illustration_id,
+      member_ids: members,
     },
-    session,
-  ))
+    advertisement_data: AdvertisementData {
+      id: 10006,
+      reward_type: 1,
+      status: 0,
+    },
+    display_plan_map: false,
+  }));
+  // Keep the Gifts counter in sync with the gift box
+  match crate::api::present::count_pending_presents(&client, session.user_id).await {
+    Ok(count) => response.add_notifications(vec![crate::api::present::present_badge(count)]),
+    Err(error) => warn!(?error, "failed to count presents for the Gifts badge"),
+  }
+
+  Ok(Signed(response, session))
 }
 
 // body={"illustration_ids": "[1011100,10242131,1064200,0,0]"}

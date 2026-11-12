@@ -1,0 +1,19 @@
+# Banners del carrusel de la portada (Home).
+#
+# Son IDs de la tabla maestra `banner` (master/banner.json). Al cerrar el juego todos
+# caducaron; el servidor reactiva los que estén aquí (fechas de hoy -1 día a +30 días)
+# y los ordena como en esta lista. Tras cambiarla, reinicia el servidor.
+#
+# Para buscar más: en master/banner.json, `destination_type` dice a dónde lleva el banner
+# (GACHA, EVENT, SHOP, DUNGEON, WEB...) y `destination_option` el ID del destino.
+# Los de GACHA solo funcionan si ese gacha está en la lista de Reclutar (src/api/gacha.rs).
+ids = [
+  1248, # Evento "Etiquette for This New Year's Party!" (24011, el que el servidor deja activo)
+  1076, # Gacha 410535
+  1077, # Gacha 410536
+  1099, # Gacha 323083
+  1100, # Gacha 410553
+  1101, # Gacha 410554
+  928,  # Gacha 410436
+  929,  # Gacha 410433
+]

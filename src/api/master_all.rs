@@ -224,6 +224,30 @@ async fn patch_master(name: &str, value: &mut Value) {
         }
       }
     }
+    // Home screen carousel. Every banner expired when the game shut down, so the carousel was empty.
+    // Banners listed in config/home-banners.toml are made active (and the rest are left as they are).
+    "banner" => {
+      let home_banners = load_home_banners();
+      info!("patching banner, home banners: {:?}", home_banners);
+      if let Some(array) = value.as_array_mut() {
+        for item in array {
+          let Some(item) = item.as_object_mut() else { continue };
+          let Some(id) = item.get("id").and_then(|id| id.as_str()).and_then(|id| id.parse::<i64>().ok()) else {
+            continue;
+          };
+          let Some(position) = home_banners.iter().position(|&banner_id| banner_id == id) else {
+            continue;
+          };
+
+          item.insert("start_at".to_owned(), Value::String(start_at_str.clone()));
+          item.insert("end_at".to_owned(), Value::String(end_at_str.clone()));
+          // Keep the order of the config file: first listed is shown first.
+          item.insert("sort_order".to_owned(), Value::String((10000 - position).to_string()));
+          // "day" limits the banner to N days since account creation
+          item.insert("day".to_owned(), Value::String("0".to_owned()));
+        }
+      }
+    }
     // Show hidden characters in character list
     // "character" => {
     //   info!("patching character");
@@ -377,6 +401,26 @@ async fn patch_master(name: &str, value: &mut Value) {
       //     }
       //   }
       // }
+    }
+  }
+}
+
+/// IDs from the `banner` master to show in the home screen carousel, see `config/home-banners.toml`.
+fn load_home_banners() -> Vec<i64> {
+  #[derive(Deserialize)]
+  struct HomeBanners {
+    ids: Vec<i64>,
+  }
+
+  let result = config::Config::builder()
+    .add_source(config::File::with_name("config/home-banners").required(false))
+    .build()
+    .and_then(|config| config.try_deserialize::<HomeBanners>());
+  match result {
+    Ok(banners) => banners.ids,
+    Err(error) => {
+      warn!("failed to load config/home-banners.toml, home carousel will be empty: {}", error);
+      Vec::new()
     }
   }
 }

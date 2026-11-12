@@ -2,7 +2,7 @@
 
 Fork de [Axel](https://github.com/Assasans/axel) (servidor de fans de *KonoSuba: Fantastic Days*) para jugar en local con servidor propio, controlar banners, probabilidades, eventos y kits, y añadir contenido nuevo. Uso personal.
 
-_Última actualización: 2026-11-11_
+_Última actualización: 2026-11-12_
 
 ## Estado actual
 
@@ -18,11 +18,18 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
 ## Qué hemos añadido
 
 - **Gacha con probabilidades reales** (rama `gacha-probabilidades-reales`): las tiradas usan `gacha.rates`; la 10.ª de una multi usa la tabla de garantía. Corregido el fallo de `gacha_rate` con `bonus_rates`. Historial de tiradas real (`gacha.user_draws`, endpoint `gachalog`).
+- **Arreglos tras la primera partida** (rama `claude/project-thread-hmlqra`, 2026-11-12):
+  - Carrusel de la portada: el servidor reactiva los banners de `config/home-banners.toml` (IDs de `master/banner.json`); todos habían caducado al cerrar el juego.
+  - Buzón de regalos real: tabla `user_presents`, contador correcto en Gifts, historial (Gift Log), regalo de bienvenida una vez por jugador y `scripts/konofan/enviar-regalo.sh` para mandar regalos. Miembros/armas/accesorios aún no se pueden regalar.
+  - Anuncios propios en Note: tabla `news` y páginas de detalle en `/static/news/<id>.html`.
+  - Los recursos locales (`resources-root`, `/srv/konofd`) por fin se usan: `serve_dir_with_fallback` servía desde la ruta de la URL y todo acababa yendo al espejo.
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
 ## Qué falta
 
-- Primera prueba real en MuMu (red, certificado, carga de recursos).
+- Note y Help (WebView) salen en blanco hasta que el WebView acepte el certificado (CA propia + certificado de servidor corto, en curso en la rama de instalación).
+- El **+ de las gemas** se queda cargando: el juego espera a Google Play Billing y la petición nunca llega al servidor. Solo se arregla en el cliente; de momento, gemas por el buzón.
+- Las monedas (gemas, eris, estamina) no se guardan en la base de datos: se fijan en cada login (`src/blob.rs`).
 - El gacha no cobra gemas/tickets (`money_type` se ignora).
 - Los banners están escritos a mano en `gacha_info()` (`src/api/gacha.rs`); hay que pasarlos a la base de datos para poder editarlos.
 - Endpoints todavía en stub (~100 avisos `encountered stub` en el código): sorteo de eventos, compras que fallan por el cliente, vincular cuenta, etc.
@@ -50,6 +57,7 @@ Otros stubs vistos en el registro: misiones (`mission_list`, `mission_home`), tr
 - **2026-11-12 — CA propia que firma el certificado del servidor (397 días).** El certificado inicial hacía de CA y de servidor a la vez: el juego lo aceptaba, pero Chromium y el WebView (Note, Help) lo rechazaban en silencio. En MuMu solo se instala la CA, así que renovar el certificado del servidor no obliga a tocar el emulador.
 - **2026-11-11 — Recursos:** de momento se sirven desde el espejo de Assasans (`upstream-url`); `mirror-assets.sh` hace la copia local (~16 GiB) para no depender de él.
 - La clave RSA de firma (`key.pem`) es la pública del repo de Axel; para uso local da igual. Si algún día se comparte el servidor, generar una propia (ver `SERVER-SETUP.md`).
+- **2026-11-12 — Banners de portada y anuncios configurables desde fuera del código** (`config/home-banners.toml`, tablas `news` y `user_presents`), pensando en el futuro panel web.
 
 ## Recursos externos
 

@@ -38,7 +38,8 @@ where
   S: Clone + Send + Sync + 'static,
 {
   fn serve_dir_with_fallback(self, path: &str, local_root: &Path, fallback_url: Option<Url>) -> Self {
-    let serve_dir = ServeDir::new(path);
+    // Serve from the local resources folder (not the URL path), falling back to the upstream mirror.
+    let serve_dir = ServeDir::new(local_root);
     if let Some(url) = fallback_url {
       self.nest_service(path, serve_dir.fallback(ServeRemoteResource::new(url)))
     } else {
@@ -54,6 +55,7 @@ pub async fn start(state: Arc<AppState>) -> io::Result<()> {
     .route("/public.pem", get(get_public_key))
     .route("/versions/{version}", get(get_version))
     .route("/webview/EN/data/json/news.json", get(get_news))
+    .route("/news/{file}", get(get_news_detail))
     .serve_dir_with_fallback(
       "/bundles",
       &settings.resources_root.join("bundles/"),
@@ -168,6 +170,20 @@ pub enum NewsCategory {
   UpdateGameMaintenance = 7,
 }
 
+impl NewsCategory {
+  pub fn from_i32(value: i32) -> Self {
+    match value {
+      1 => NewsCategory::AnnouncementReportError,
+      2 => NewsCategory::Event,
+      3 => NewsCategory::EventRecruit,
+      4 => NewsCategory::EventCampaign,
+      6 => NewsCategory::Update,
+      7 => NewsCategory::UpdateGameMaintenance,
+      _ => NewsCategory::AnnouncementNotice,
+    }
+  }
+}
+
 #[derive(Debug, Clone, Copy, Serialize_repr, Deserialize_repr)]
 #[repr(u8)]
 pub enum NewsPlatform {
@@ -177,38 +193,123 @@ pub enum NewsPlatform {
   Pc = 3,
 }
 
-async fn get_news() -> axum::response::Result<impl IntoResponse, AppError> {
-  info!("get news");
-
-  let time = Utc::now();
-  let news = vec![
-    NewsItem {
-      title: "May There Be a Blessing on This Wonderful Server!".to_string(),
-      category: NewsCategory::AnnouncementNotice,
-      platform: NewsPlatform::All,
-      thumbnail: None,
-      banner: Some("https://smb.assasans.dev/konofd/story-images/1013104.png".to_string()),
-      url: "./detail/00-axel.html".to_string(),
-      priority: Some(1),
-      start_at: (time - chrono::Duration::days(7)).timestamp(),
-      end_at: (time + chrono::Duration::days(7)).timestamp(),
-      date: "2025-07-28".to_owned(),
-    },
-    NewsItem {
-      title: "May There Be a Database for This Wonderful Server!".to_string(),
-      category: NewsCategory::AnnouncementNotice,
-      platform: NewsPlatform::All,
-      thumbnail: None,
-      banner: Some("https://smb.assasans.dev/konofd/story-images/1063100.png".to_string()),
-      url: "./detail/01-axel.html".to_string(),
-      priority: Some(1),
-      start_at: (time - chrono::Duration::days(6)).timestamp(),
-      end_at: (time + chrono::Duration::days(7)).timestamp(),
-      date: "2025-12-12".to_owned(),
-    },
-  ];
+/// Announcements for "Note", from the `news` table (see migrations/20261112000002_add_news.sql).
+async fn get_news(State(state): State<Arc<AppState>>) -> axum::response::Result<impl IntoResponse, AppError> {
+  let news = match fetch_news(&state).await {
+    Ok(news) => news,
+    Err(error) => {
+      // Most likely the news table does not exist yet: show an empty list instead of breaking the page
+      warn!(?error, "failed to load news");
+      Vec::new()
+    }
+  };
+  info!(count = news.len(), "get news");
 
   Ok(Json(news))
+}
+
+async fn fetch_news(state: &AppState) -> anyhow::Result<Vec<NewsItem>> {
+  let client = state.get_database_client().await?;
+  #[rustfmt::skip]
+  let rows = client.query(/* language=postgresql */ r#"
+    select id, title, category, banner, priority, start_at, end_at
+    from news
+    where start_at <= now()
+      and (end_at is null or end_at > now())
+    order by priority desc, start_at desc
+  "#, &[]).await?;
+
+  let base = format_url(&state.settings.static_server.public_url, Some("news/")).map_err(anyhow::Error::msg)?;
+  let news = rows
+    .iter()
+    .map(|row| {
+      let id: i64 = row.get("id");
+      let category: i32 = row.get("category");
+      let start_at: chrono::DateTime<Utc> = row.get("start_at");
+      let end_at: Option<chrono::DateTime<Utc>> = row.get("end_at");
+      NewsItem {
+        title: row.get("title"),
+        category: NewsCategory::from_i32(category),
+        platform: NewsPlatform::All,
+        thumbnail: None,
+        banner: row.get("banner"),
+        url: format!("https://{base}{id}.html"),
+        priority: Some(row.get::<_, i32>("priority") as i64),
+        start_at: start_at.timestamp(),
+        end_at: end_at
+          .unwrap_or_else(|| Utc::now() + chrono::Duration::days(365))
+          .timestamp(),
+        date: start_at.format("%Y-%m-%d").to_string(),
+      }
+    })
+    .collect();
+  Ok(news)
+}
+
+/// Page opened when tapping an announcement in "Note".
+async fn get_news_detail(
+  State(state): State<Arc<AppState>>,
+  extract::Path(file): extract::Path<String>,
+) -> axum::response::Result<impl IntoResponse, AppError> {
+  let not_found = || (StatusCode::NOT_FOUND, Html("<h1>Not found</h1>".to_owned())).into_response();
+  let Some(id) = file.strip_suffix(".html").unwrap_or(&file).parse::<i64>().ok() else {
+    return Ok(not_found());
+  };
+
+  let client = state.get_database_client().await?;
+  #[rustfmt::skip]
+  let row = client.query_opt(/* language=postgresql */ r#"
+    select title, banner, body, start_at
+    from news
+    where id = $1
+  "#, &[&id]).await?;
+  let Some(row) = row else {
+    return Ok(not_found());
+  };
+
+  let title: String = row.get("title");
+  let banner: Option<String> = row.get("banner");
+  let body: String = row.get("body");
+  let start_at: chrono::DateTime<Utc> = row.get("start_at");
+  let banner = banner
+    .map(|url| format!(r#"<img src="{}" alt="">"#, html_escape(&url)))
+    .unwrap_or_default();
+
+  Ok(
+    Html(format!(
+      r#"<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+  body {{ margin: 0; padding: 16px; font-family: sans-serif; background: #fdf6e3; color: #4a3b2a; }}
+  h1 {{ font-size: 1.3em; margin: 0 0 4px; }}
+  .date {{ color: #8a7a66; font-size: 0.85em; margin-bottom: 12px; }}
+  img {{ max-width: 100%; border-radius: 6px; margin-bottom: 12px; }}
+</style>
+</head>
+<body>
+{banner}
+<h1>{title}</h1>
+<div class="date">{date}</div>
+{body}
+</body>
+</html>"#,
+      title = html_escape(&title),
+      date = start_at.format("%Y-%m-%d"),
+    ))
+    .into_response(),
+  )
+}
+
+fn html_escape(text: &str) -> String {
+  text
+    .replace('&', "&amp;")
+    .replace('<', "&lt;")
+    .replace('>', "&gt;")
+    .replace('"', "&quot;")
 }
 
 fn format_url(url: &Url, suffix: Option<&str>) -> Result<String, &'static str> {
