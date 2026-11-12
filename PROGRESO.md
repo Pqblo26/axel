@@ -49,19 +49,26 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
   - Misiones: el contador rojo venía de avisos fijos (clave 3 = 2, clave 13 = 7) y de un «misión completada» (11210001) en cada combate. Van a 0 hasta que las misiones sean reales.
   - Equipos: Reset vacía el equipo y Suggest lo llena con los personajes más fuertes (uno por personaje: 5 titulares y luego suplentes).
   - `scorechallenge_log` ya no falla cuando el juego no manda `event_id`.
+- **Sexta tanda: progreso real** (2026-11-12):
+  - Las cuentas nuevas ya no nacen con rango 45, todo completado y todos los personajes. Empiezan con Kazuma, Aqua, Megumin y Darkness; el gacha del tutorial guarda de verdad sus 10 personajes. Monedas iniciales: 10 000 eris y 3000 cuarzos gratis (más los regalos de bienvenida, ahora con 20 tickets de salto). Ya no se regalan todas las armas, 60 000 pociones ni 200 000 medallas.
+  - Rango y experiencia del jugador guardados (`user_progress`, maestro `exp`): la estamina máxima sale del rango y al subir de rango se recarga.
+  - Progreso de misiones (`user_quest_progress`): la historia se desbloquea con `unlock_clearstage` (partes, capítulos y fases), se guardan las coronas y cada corona da su recompensa la primera vez (`mainmission_reward{1,2,3}_packid`; la 1-1 da a Iris). Hard: 3 intentos al día; Expert: 1. Solo se puede saltar una fase con las 3 coronas, y los saltos gastan intentos y dan experiencia.
+  - Los combates dan experiencia a los titulares y se guarda (antes 230 fijo y no se guardaba). Perder ya no da recompensas.
+  - Free Quest: solo salen las zonas fijas y las del día de la semana (hora de Japón), con sus intentos diarios. Las zonas de eventos antiguos (las de nombre en japonés) ya no aparecen.
+  - Miembros desde regalos, canjes, packs y coronas (`src/user/grant.rs`), con su personaje y habilidades.
+  - `scripts/konofan/reiniciar-cuenta.sh`: devuelve una cuenta al estado de después del tutorial.
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
 ## Qué falta
 
 - El **+ de las gemas** se queda cargando: el juego espera a Google Play Billing y la petición nunca llega al servidor. Solo se arregla en el cliente; de momento, gemas por el buzón.
-- Miembros, armas y accesorios no se pueden dar desde regalos ni canjes todavía.
-- La experiencia y el rango del jugador no se guardan (siempre rango 45); el máximo de estamina sale de ese rango.
+- Armas y accesorios no se pueden dar desde regalos ni canjes todavía.
+- Sin comprobar en el juego: que el cliente acepte rango y experiencia absolutos tras el combate (se mandan como las monedas) y que las fases bloqueadas se oculten bien.
 - Fame Potions: se pueden comprar, pero `use_supplement_num` al empezar una Fame Quest todavía no las gasta.
 - Boss de evento: falta dar medallas (los maestros no dicen cuántas) e intentos limitados por día (`limit`, Challenges, Battle Arena).
 - El gacha no cobra gemas/tickets (`money_type` se ignora).
 - Los banners están escritos a mano en `gacha_info()` (`src/api/gacha.rs`); hay que pasarlos a la base de datos para poder editarlos.
 - Endpoints todavía en stub (~100 avisos `encountered stub` en el código): sorteo de eventos, compras que fallan por el cliente, vincular cuenta, etc.
-- El progreso del menú principal no se guarda.
 - Herramientas propias: **panel web** (Pablo lo quiere) para ver jugadores, tiradas y registros, y editar banners, probabilidades, eventos y personajes.
 
 ## Fallos encontrados jugando (2026-11-12)

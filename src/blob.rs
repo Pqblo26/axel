@@ -3,6 +3,7 @@ use crate::api::{CharacterParameter, MemberParameterWire, RemoteData, RemoteData
 use crate::level::get_intimacy_level_calculator;
 use crate::member::{FetchUserMemberSkillsIn, FetchUserMembers, MemberPrototype};
 use crate::user::session::Session;
+use crate::user::progress::PlayerProgress;
 use crate::user::wallet::Wallet;
 use crate::AppState;
 use anyhow::Context;
@@ -276,6 +277,8 @@ pub async fn get_login_remote_data(state: &AppState, session: &Session) -> Vec<R
       .collect::<Vec<_>>()
   };
 
+  // Player rank (user_progress) is read first: it sets the maximum stamina
+  let progress = PlayerProgress::load(&client, session.user_id).await.unwrap();
   // Currencies and stamina are stored in user_wallet
   let wallet = Wallet::load(&client, session.user_id).await.unwrap();
   wallet.save(&client, session.user_id).await.unwrap();
@@ -427,7 +430,8 @@ pub async fn get_login_remote_data(state: &AppState, session: &Session) -> Vec<R
     // AddItem::new(RemoteDataItemType::PowerPotion, 3, 2, 2).into_remote_data(),
     // AddItem::new(RemoteDataItemType::PowerPotion, 1, 3, 2).into_remote_data(),
     AddItem::new(RemoteDataItemType::Ticket, 0, 17, 2).into_remote_data(),
-    AddSingletonItem::new(RemoteDataItemType::Level, 45).into_remote_data(),
+    AddSingletonItem::new(RemoteDataItemType::Level, progress.rank).into_remote_data(),
+    AddSingletonItem::new(RemoteDataItemType::Exp, progress.exp).into_remote_data(),
     // AddMemberBackground::new(5, 1010).into_remote_data(),
     // AddMemberBackground::new(4, 1011).into_remote_data(),
     // AddMemberBackground::new(3, 1012).into_remote_data(),

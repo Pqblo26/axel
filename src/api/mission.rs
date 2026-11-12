@@ -1,27 +1,19 @@
-use std::collections::HashMap;
 use std::sync::Arc;
-use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use tracing::warn;
 
 use crate::api::master_all::{get_master_manager, get_masters};
-use crate::api::{battle, ApiRequest, NotificationData};
+use crate::api::{battle, ApiRequest};
 use crate::api::battle::{
-  apply_reward_multiplier, grant_rewards, make_battle_member_exp_and_character_love, pay_quest_money,
   AutoProgressionResultResponse, BattleResultResponse,
 };
-use crate::api::quest::stage::stage_info;
-use crate::api::quest::parse_reward_items;
-use crate::api::quest::quest_hunting::BattleReward;
 use crate::call::{CallCustom, CallResponse};
 use crate::extractor::Params;
 use crate::handler::{IntoHandlerResponse, Signed, Unsigned};
 use crate::user::session::Session;
 use crate::AppState;
-use crate::member::FetchUserParty;
-use crate::notification::MissionDone;
 
 #[derive(Debug, Serialize)]
 pub struct MissionList {
@@ -359,42 +351,26 @@ pub async fn marathon_quest_result(
   session: Arc<Session>,
   Params(params): Params<MarathonQuestResultRequest>,
 )  -> impl IntoHandlerResponse {
-  let mut client = state.get_database_client().await?;
-  let transaction = client.transaction().await.context("failed to start transaction")?;
-
-  let stage = stage_info(params.quest_id).context("unknown event quest stage")?;
-  let mut rewards = stage.rewards.clone();
-  apply_reward_multiplier(&transaction, &session, &mut rewards).await?;
-  let update_items = grant_rewards(&transaction, &session, &rewards).await?;
-  transaction.commit().await.context("failed to commit transaction")?;
-  let wallet_remote = pay_quest_money(&client, &session, stage.money as i64).await?;
-
-  let party = FetchUserParty::new(&client)
-    .await?
-    .run(session.user_id, params.party_id as i64)
-    .await?;
-
-  let (member_exp, love) =
-    make_battle_member_exp_and_character_love(&party, &client, &session, stage.intimacy_exp).await?;
+  let outcome = crate::api::quest::finish::finish_quest_battle(
+    &state,
+    &session,
+    params.quest_id,
+    params.party_id,
+    params.win != 0,
+    &params.clearquestmission,
+  )
+  .await?;
   let mut response = CallResponse::new_success(Box::new(BattleResultResponse {
-    limit: 0,
-    exp: stage.player_exp,
-    lvup: 0,
-    money: stage.money,
+    limit: outcome.limit,
+    exp: outcome.exp,
+    lvup: outcome.lvup,
+    money: outcome.money,
     storyunlock: vec![],
-    love,
-    member_exp,
+    love: outcome.love,
+    member_exp: outcome.member_exp,
     mission: params.clearquestmission,
-    reward: rewards
-      .iter()
-      .map(|item| BattleReward {
-        itemtype: item.item_type,
-        itemid: item.item_id,
-        itemnum: item.item_num,
-        is_rare: item.item_rare,
-      })
-      .collect(),
-    clearreward: vec![],
+    reward: outcome.reward,
+    clearreward: outcome.clearreward,
     auto_progression_result: AutoProgressionResultResponse {
       auto_count: 0,
       is_continue: false,
@@ -403,26 +379,9 @@ pub async fn marathon_quest_result(
       reward_all: vec![],
       clearreward_all: vec![],
     },
-    firstclear: true,
+    firstclear: outcome.firstclear,
   }));
-  response.remote.extend(update_items);
-  response.remote.extend(wallet_remote);
-  // TODO: Send remote data to actually update characters stats
-  response.add_notifications(vec![
-    NotificationData::new(1, 16, 1, 0, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 22, 0, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 14, 0, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 14, 0, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 14, 0, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 20, 0, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 3, 0, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 13, 0, "".to_string(), "".to_string()),
-    NotificationData::new(1, 7, 34, 1, "show_button".to_string(), "".to_string()),
-    NotificationData::new(1, 6, 1, 30030001, "".to_string(), "".to_string()),
-    NotificationData::new(1, 10, 230731, 52307325, "".to_string(), "".to_string()),
-    NotificationData::new(1, 10, 230831, 52308305, "".to_string(), "".to_string()),
-  ]);
-
+  response.remote.extend(outcome.remote);
   Ok(Unsigned(response))
 }
 

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock};
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
 
 use crate::AppState;
 use crate::api::RemoteDataItemType;
@@ -17,6 +17,7 @@ use crate::call::{CallCustom, CallResponse};
 use crate::extractor::Params;
 use crate::handler::{IntoHandlerResponse, Signed};
 use crate::item::UpdateItemCountBy;
+use crate::user::grant::grant_items;
 use crate::member::MemberPrototype;
 use crate::user::session::Session;
 
@@ -326,22 +327,12 @@ pub async fn exchange(
     warn!(?params, pack_id = entry.pack_id, "exchange pack not found");
     return Ok(Signed(CallResponse::new_success_empty(), session));
   };
-  for (item_type, item_id, num) in pack_contents(pack) {
-    let kind = RemoteDataItemType::from(item_type);
-    let num = num * params.num;
-    match grant_kind(kind) {
-      Grant::Singleton => {
-        wallet.add(kind, num as i64)?;
-      }
-      Grant::Item => {
-        let item = update_items.run(session.user_id, (kind, item_id), num).await?;
-        response.remote.extend(item.into_remote_data());
-      }
-      Grant::Unsupported => {
-        warn!(?params, ?item_type, ?item_id, ?num, "exchange reward type not supported yet, not given");
-      }
-    }
-  }
+  let items = pack_contents(pack)
+    .into_iter()
+    .map(|(item_type, item_id, num)| (item_type, item_id, num * params.num))
+    .collect::<Vec<_>>();
+  response.remote.extend(grant_items(&transaction, session.user_id, &mut wallet, &items).await?);
+
 
   #[rustfmt::skip]
   transaction.execute(/* language=postgresql */ r#"

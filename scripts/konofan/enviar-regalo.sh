@@ -11,7 +11,7 @@
 # Tipos más útiles (RemoteDataItemType en src/api/mod.rs):
 #   1 eris · 2 cuarzo de pago · 3 cuarzo gratis · 9 estamina · 18 pociones de poder (id 1-3)
 #   21 tickets de gacha (id según master/item.json) · 29 objetos de estamina (id 1-2) · 20 medallas
-# Miembros, armas y accesorios todavía no se pueden regalar (se quedan en el buzón).
+# Miembros (tipo 4) se reciben de verdad; armas y accesorios todavía no (se quedan en el buzón).
 #
 # El juego actualiza el contador al volver a la portada.
 set -euo pipefail

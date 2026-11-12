@@ -59,7 +59,9 @@ pub(crate) enum Grant {
   Singleton,
   /// Countable items stored in `user_items` (tickets, potions, materials, medals...).
   Item,
-  /// Members, equipment and other unique things: not supported yet, stay in the gift box.
+  /// Members (a reserve copy if already owned), see [crate::user::grant::grant_member].
+  Member,
+  /// Equipment and other unique things: not supported yet, stay in the gift box.
   Unsupported,
 }
 
@@ -67,7 +69,8 @@ pub(crate) fn grant_kind(item_type: RemoteDataItemType) -> Grant {
   use RemoteDataItemType::*;
   match item_type {
     Money | RealMoney | RealMoneyFree | Stamina => Grant::Singleton,
-    Member | Weapon | Accessory | Character | SpecialSkill | MemberCostume | MemberBackground | Assist | Exp
+    Member => Grant::Member,
+    Weapon | Accessory | Character | SpecialSkill | MemberCostume | MemberBackground | Assist | Exp
     | Level | FameRank => Grant::Unsupported,
     _ => Grant::Item,
   }
@@ -314,6 +317,11 @@ pub async fn present_get(
           .context("failed to grant present item")?;
         remote.extend(item.into_remote_data());
       }
+      Grant::Member => {
+        for _ in 0..item_num.max(1) {
+          remote.extend(crate::user::grant::grant_member(&transaction, session.user_id, item_id).await?);
+        }
+      }
       Grant::Unsupported => {
         warn!(
           ?id,
@@ -394,6 +402,13 @@ pub const WELCOME_PRESENTS: &[(&str, RemoteDataItemType, i64, i32, &str)] = &[
     RemoteDataItemType::PowerPotion,
     3,
     10,
+    "¡Bienvenido a tu servidor!",
+  ),
+  (
+    "welcome:skip_tickets",
+    RemoteDataItemType::SkipTicket,
+    1,
+    20,
     "¡Bienvenido a tu servidor!",
   ),
 ];

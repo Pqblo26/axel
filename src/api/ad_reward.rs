@@ -6,13 +6,12 @@ use tracing::{info, warn};
 
 use crate::api::exchange::{get_pack, pack_contents};
 use crate::api::master_all::{get_master_manager, get_masters};
-use crate::api::present::{grant_kind, Grant};
 use crate::api::RemoteDataItemType;
-use crate::blob::IntoRemoteData;
 use crate::call::{CallCustom, CallResponse, STATUS_QUARTZ_NOT_ENOUGH};
 use crate::extractor::Params;
 use crate::handler::{IntoHandlerResponse, Unsigned};
 use crate::item::UpdateItemCountBy;
+use crate::user::grant::grant_items;
 use crate::user::id::UserId;
 use crate::user::session::Session;
 use crate::user::wallet::Wallet;
@@ -231,22 +230,12 @@ async fn purchase(state: &AppState, session: &Session, params: &BuyRequest) -> a
     warn!(?params, ?pack_id, "shop pack not found, nothing bought");
     return Ok(CallResponse::new_success(Box::new(BuyResponse::default())));
   };
-  for (item_type, item_id, num) in pack_contents(pack) {
-    let kind = RemoteDataItemType::from(item_type);
-    let num = num * count;
-    match grant_kind(kind) {
-      Grant::Singleton => {
-        wallet.add(kind, num as i64)?;
-      }
-      Grant::Item => {
-        let item = update_items.run(session.user_id, (kind, item_id), num).await?;
-        remote.extend(item.into_remote_data());
-      }
-      Grant::Unsupported => {
-        warn!(?params, ?item_type, ?item_id, ?num, "shop pack item type not supported yet, not given");
-      }
-    }
-  }
+  let items = pack_contents(pack)
+    .into_iter()
+    .map(|(item_type, item_id, num)| (item_type, item_id, num * count))
+    .collect::<Vec<_>>();
+  remote.extend(grant_items(&transaction, session.user_id, &mut wallet, &items).await?);
+
   wallet.save(&transaction, session.user_id).await?;
 
   #[rustfmt::skip]

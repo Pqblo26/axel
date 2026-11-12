@@ -1,6 +1,6 @@
 use crate::api::master_all::get_master_manager;
-use crate::api::RemoteDataItemType;
 use crate::member::{FetchUserMembers, MemberPrototype};
+use crate::user::grant::STARTING_MEMBERS;
 use crate::user::overrides::FetchUserOverrides;
 use crate::user::session::Session;
 use anyhow::Context;
@@ -33,19 +33,15 @@ macro_rules! migration {
 pub async fn run_migrations(session: &Session, client: &mut Client) {
   static MIGRATIONS: LazyLock<Vec<Migration>> = LazyLock::new(|| {
     vec![
+      migration!(add_starting_members),
       migration!(add_user_characters),
-      migration!(add_user_members),
-      migration!(add_user_members_reserve),
       migration!(add_user_parties),
-      migration!(add_user_items),
-      migration!(add_user_equipment),
       migration!(add_user_character_special_skills),
       migration!(add_user_party_form_skills),
       migration!(add_user_member_skills),
       migration!(add_user_home_illustrations),
       migration!(set_user_current_home_member),
       migration!(add_user_welcome_presents),
-      migration!(add_user_exchange_medals),
     ]
   });
 
@@ -79,26 +75,33 @@ pub async fn run_migrations(session: &Session, client: &mut Client) {
   debug!(user_id = %session.user_id, "applied {} migrations", MIGRATIONS.len());
 }
 
+/// Adds the characters of the members the user owns (accounts made before progression was
+/// stored already have every character).
 async fn add_user_characters(session: &Session, client: &mut Client) -> u64 {
   #[rustfmt::skip]
   let statement = client
     .prepare(/* language=postgresql */ r#"
       insert into user_characters (user_id, character_id, intimacy)
-      select $1, m.id::bigint, 0
+      select $1, m.id, 0
       from unnest($2::bigint[]) as m(id)
       where not exists (
         select 1 from user_characters uc
-        where uc.user_id = $1 and uc.character_id = m.id::bigint
+        where uc.user_id = $1 and uc.character_id = m.id
       )
     "#)
     .await
     .context("failed to prepare statement")
     .unwrap();
-  let character_ids: Vec<i64> = get_master_manager()
-    .get_master("character")
+  let fetch_members = FetchUserMembers::new(&*client).await.unwrap();
+  let mut character_ids: Vec<i64> = fetch_members
+    .run(session.user_id)
+    .await
+    .unwrap()
     .iter()
-    .map(|data| data.get("id").unwrap().as_str().unwrap().parse::<i64>().unwrap())
+    .map(|member| member.prototype.character_id)
     .collect();
+  character_ids.sort_unstable();
+  character_ids.dedup();
   client
     .execute(&statement, &[&session.user_id, &character_ids])
     .await
@@ -106,60 +109,21 @@ async fn add_user_characters(session: &Session, client: &mut Client) -> u64 {
     .unwrap()
 }
 
-async fn add_user_members(session: &Session, client: &mut Client) -> u64 {
+/// New accounts start with Kazuma, Aqua, Megumin and Darkness (the tutorial gacha adds more).
+async fn add_starting_members(session: &Session, client: &mut Client) -> u64 {
   #[rustfmt::skip]
   let statement = client
     .prepare(/* language=postgresql */ r#"
       insert into user_members (user_id, member_id, xp, promotion_level)
-      select
-        $1,
-        m.id::bigint,
-        (floor(random() * 50000) + 5000)::int as xp,
-        (floor(random() * 6))::int
+      select $1, m.id, 0, 0
       from unnest($2::bigint[]) as m(id)
-      where not exists (
-        select 1 from user_members um
-        where um.user_id = $1 and um.member_id = m.id::bigint
-      )
+      where not exists (select 1 from user_members um where um.user_id = $1)
     "#)
     .await
     .context("failed to prepare statement")
     .unwrap();
-  let member_ids: Vec<i64> = get_master_manager()
-    .get_master("member")
-    .iter()
-    .map(|data| data.get("id").unwrap().as_str().unwrap().parse::<i64>().unwrap())
-    .collect();
   client
-    .execute(&statement, &[&session.user_id, &member_ids])
-    .await
-    .context("failed to execute query")
-    .unwrap()
-}
-
-async fn add_user_members_reserve(session: &Session, client: &mut Client) -> u64 {
-  #[rustfmt::skip]
-  let statement = client
-    .prepare(/* language=postgresql */ r#"
-      insert into user_members_reserve (user_id, member_id)
-      select $1, m.id::bigint
-      from unnest($2::bigint[]) as m(id)
-             cross join lateral generate_series(1, floor(random() * 10 + 1)::int) as s
-      where not exists (select 1
-                        from user_members_reserve um
-                        where um.user_id = $1
-                          and um.member_id = m.id::bigint)
-    "#)
-    .await
-    .context("failed to prepare statement")
-    .unwrap();
-  let member_ids: Vec<i64> = get_master_manager()
-    .get_master("member")
-    .iter()
-    .map(|data| data.get("id").unwrap().as_str().unwrap().parse::<i64>().unwrap())
-    .collect();
-  client
-    .execute(&statement, &[&session.user_id, &member_ids])
+    .execute(&statement, &[&session.user_id, &STARTING_MEMBERS.to_vec()])
     .await
     .context("failed to execute query")
     .unwrap()
@@ -188,7 +152,8 @@ async fn add_user_parties(session: &Session, client: &mut Client) -> u64 {
         ip.user_id,
         ip.party_id,
         f.form_id,
-        1001100, -- main_member_id
+        -- Kazuma, Aqua, Megumin and Darkness (the starting members), last form empty
+        (array[1001100, 1011100, 1021100, 1031100, 0])[f.form_id], -- main_member_id
         0,       -- sub1_member_id
         0,       -- sub2_member_id
         0,       -- weapon_id
@@ -208,131 +173,6 @@ async fn add_user_parties(session: &Session, client: &mut Client) -> u64 {
     .await
     .context("failed to execute query")
     .unwrap()
-}
-
-/// Give some default items if none exist.
-async fn add_user_items(session: &Session, client: &mut Client) -> u64 {
-  #[rustfmt::skip]
-  let statement = client
-    .prepare(/* language=postgresql */ r#"
-      insert into user_items (user_id, item_type, item_id, quantity)
-      select $1 as user_id,
-             v.item_type,
-             v.item_id,
-             v.quantity
-      from (select item_type, item_id, sum(quantity) as quantity
-            from (values (18::bigint, 1::bigint, 30000::integer),
-                         (18::bigint, 2::bigint, 20000::integer),
-                         (18::bigint, 3::bigint, 10000::integer)) as t(item_type, item_id, quantity)
-            group by item_type, item_id) as v
-      on conflict (user_id, item_type, item_id) do nothing
-    "#)
-    .await
-    .context("failed to prepare statement")
-    .unwrap();
-  client
-    .execute(&statement, &[&session.user_id])
-    .await
-    .context("failed to execute query")
-    .unwrap()
-}
-
-async fn add_user_equipment(session: &Session, client: &mut Client) -> u64 {
-  // Check if user has any equipment items
-  #[rustfmt::skip]
-  let check_statement = client
-    .prepare(/* language=postgresql */ r#"
-      select exists(
-        select 1 from user_items_equipment
-        where user_id = $1
-      )
-    "#)
-    .await
-    .context("failed to prepare check statement")
-    .unwrap();
-
-  let has_items: bool = client
-    .query_one(&check_statement, &[&session.user_id])
-    .await
-    .context("failed to check for existing items")
-    .unwrap()
-    .get(0);
-
-  if has_items {
-    0
-  } else {
-    let items = get_master_manager()
-      .get_master("equip_weapon_details")
-      .into_iter()
-      .filter_map(|data| {
-        let item_id = data["item_id"].as_str().unwrap().parse::<i64>().unwrap();
-        let level = data["lv"].as_str().unwrap().parse::<i32>().unwrap();
-        if matches!(level, 0 | 5) {
-          Some((
-            session.user_id,
-            Into::<i32>::into(RemoteDataItemType::Weapon) as i64,
-            item_id,
-            level,
-          ))
-        } else {
-          None
-        }
-      })
-      .collect::<Vec<_>>();
-
-    let transaction = client
-      .transaction()
-      .await
-      .context("failed to start transaction")
-      .unwrap();
-
-    #[rustfmt::skip]
-    let copy_statement = transaction
-      .prepare(/* language=postgresql */ r#"
-        copy user_items_equipment (user_id, item_type, item_id, level)
-        from stdin with (format binary)
-      "#)
-      .await
-      .context("failed to prepare COPY statement")
-      .unwrap();
-
-    let sink = transaction
-      .copy_in(&copy_statement)
-      .await
-      .context("failed to start COPY")
-      .unwrap();
-
-    let writer = tokio_postgres::binary_copy::BinaryCopyInWriter::new(
-      sink,
-      &[
-        tokio_postgres::types::Type::INT8, // user_id
-        tokio_postgres::types::Type::INT8, // item_type
-        tokio_postgres::types::Type::INT8, // item_id
-        tokio_postgres::types::Type::INT4, // level
-      ],
-    );
-
-    tokio::pin!(writer);
-
-    for item in &items {
-      writer
-        .as_mut()
-        .write(&[&item.0, &item.1, &item.2, &item.3])
-        .await
-        .context("failed to write row")
-        .unwrap();
-    }
-
-    let rows_inserted = writer.finish().await.context("failed to finish COPY").unwrap();
-
-    transaction
-      .commit()
-      .await
-      .context("failed to commit transaction")
-      .unwrap();
-
-    rows_inserted
-  }
 }
 
 async fn add_user_character_special_skills(session: &Session, client: &mut Client) -> u64 {
@@ -481,7 +321,7 @@ async fn add_user_party_form_skills(session: &Session, client: &mut Client) -> u
     });
   trace!(?skills_by_character, "mapped skills by character");
 
-  let mut transaction = client
+  let transaction = client
     .transaction()
     .await
     .context("failed to start transaction")
@@ -513,10 +353,11 @@ async fn add_user_party_form_skills(session: &Session, client: &mut Client) -> u
     let form_id: i64 = row.get(2);
     let main_member_id: i64 = row.get(3);
 
-    let character_id = MemberPrototype::load_from_id(main_member_id).character_id;
-
-    // get some default skill for main_member_id
-    let default_skill_id = {
+    // get some default skill for main_member_id (none for an empty form)
+    let default_skill_id = if main_member_id == 0 {
+      0
+    } else {
+      let character_id = MemberPrototype::load_from_id(main_member_id).character_id;
       let skills = skills_by_character.get(&character_id);
       if let Some(skills) = skills {
         // TODO: Not first?
@@ -810,26 +651,4 @@ async fn add_user_welcome_presents(session: &Session, client: &mut Client) -> u6
       .unwrap();
   }
   rows_modified
-}
-
-/// Goddess medals and skip tickets used to be added on every login without being stored, so exchanging
-/// or earning them did nothing. Store the same starting amounts once so they can be spent and earned.
-async fn add_user_exchange_medals(session: &Session, client: &mut Client) -> u64 {
-  #[rustfmt::skip]
-  let statement = client
-    .prepare(/* language=postgresql */ r#"
-      insert into user_items (user_id, item_type, item_id, quantity)
-      values ($1, 20, 1011, 101100),
-             ($1, 20, 1012, 101200),
-             ($1, 8, 1, 800)
-      on conflict (user_id, item_type, item_id) do nothing
-    "#)
-    .await
-    .context("failed to prepare statement")
-    .unwrap();
-  client
-    .execute(&statement, &[&session.user_id])
-    .await
-    .context("failed to execute query")
-    .unwrap()
 }

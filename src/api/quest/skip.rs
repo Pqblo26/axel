@@ -12,7 +12,11 @@ use crate::item::UpdateItemCountBy;
 use crate::user::session::Session;
 use crate::user::wallet::Wallet;
 use anyhow::Context;
-use std::collections::BTreeMap;
+use crate::api::quest::progress::{area_daily_count, load_progress, main_stage_daily_limit, quest_status, record_quest};
+use crate::api::quest::quest_hunting::hunting_area_limit;
+use crate::api::quest::stage::StageKind;
+use crate::user::progress::PlayerProgress;
+use std::collections::{BTreeMap, HashMap};
 use tracing::{info, warn};
 
 /// Skip tickets are a single item: type 8, id 1.
@@ -56,6 +60,34 @@ pub async fn skip_quests(
   let mut client = state.get_database_client().await?;
   let transaction = client.transaction().await.context("failed to start transaction")?;
 
+  // Only stages cleared with all three crowns can be skipped, and skips use daily attempts
+  let progress = load_progress(&transaction, session.user_id).await?;
+  let mut area_skips: HashMap<i32, i32> = HashMap::new();
+  for skip in skips {
+    let count = skip.skip_count.max(0);
+    let stage = stage_info(skip.quest_id).expect("checked above");
+    let entry = progress.get(&stage.id);
+    if quest_status(entry) != 3 {
+      warn!(quest_id = skip.quest_id, "stage not cleared with all crowns, cannot skip");
+      return Ok(empty());
+    }
+    let stage_limit = main_stage_daily_limit(stage);
+    if stage_limit > 0 && entry.map(|entry| entry.daily_count).unwrap_or(0) + count > stage_limit {
+      warn!(quest_id = skip.quest_id, "no attempts left today, cannot skip");
+      return Ok(empty());
+    }
+    if stage.kind == StageKind::Hunting {
+      *area_skips.entry(stage.area_id).or_default() += count;
+    }
+  }
+  for (area_id, count) in area_skips {
+    let limit = hunting_area_limit(area_id);
+    if limit > 0 && area_daily_count(&progress, StageKind::Hunting, area_id) + count > limit {
+      warn!(area_id, "no attempts left today in this area, cannot skip");
+      return Ok(empty());
+    }
+  }
+
   #[rustfmt::skip]
   let owned_tickets: i32 = transaction.query_opt(/* language=postgresql */ r#"
     select quantity from user_items where user_id = $1 and item_type = $2 and item_id = $3
@@ -73,7 +105,19 @@ pub async fn skip_quests(
     return Ok(empty());
   }
   wallet.add(RemoteDataItemType::Money, money)?;
+
+  let mut player = PlayerProgress::load(&transaction, session.user_id).await?;
+  let player_exp: i32 = runs.iter().map(|stage| stage.player_exp).sum();
+  let lvup = player.add_exp(player_exp);
+  if lvup > 0 {
+    wallet.rank_up(player.rank);
+  }
+  player.save(&transaction, session.user_id).await?;
   wallet.save(&transaction, session.user_id).await?;
+
+  for skip in skips {
+    record_quest(&transaction, session.user_id, skip.quest_id, skip.skip_count.max(0), [false; 3]).await?;
+  }
 
   let update_items = UpdateItemCountBy::new(&transaction).await?;
   // Last known amount of each item, sent once at the end
@@ -116,7 +160,7 @@ pub async fn skip_quests(
   transaction.commit().await.context("failed to commit transaction")?;
   info!(runs = runs.len(), ?tickets, ?stamina, ?money, "quests skipped");
 
-  let mut response = CallResponse::new_success(Box::new(BattleSkipResponse { lvup: 0, reward }));
+  let mut response = CallResponse::new_success(Box::new(BattleSkipResponse { lvup, reward }));
   response.remote.extend(
     items
       .into_values()
@@ -124,5 +168,6 @@ pub async fn skip_quests(
       .collect::<Vec<RemoteData>>(),
   );
   response.remote.extend(wallet.to_remote_data());
+  response.remote.extend(player.to_remote_data());
   Ok(response)
 }
