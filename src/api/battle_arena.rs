@@ -407,10 +407,14 @@ pub async fn score_challenge_mission_list() -> impl IntoHandlerResponse {
 // See [Wonder_Api_EventScorechallengeLogRequest_Fields]
 #[derive(Debug, Deserialize)]
 pub struct ScoreChallengeLogRequest {
-  pub event_id: i32,
-  pub stage_id: i32,
-  #[serde(rename = "party_no")]
-  pub party_id: i32,
+  // The client does not always send these: it is only a battle log, so don't fail without them
+  #[serde(default)]
+  pub event_id: Option<i32>,
+  #[serde(default)]
+  pub stage_id: Option<i32>,
+  #[serde(rename = "party_no", default)]
+  pub party_id: Option<i32>,
+  #[serde(default)]
   pub log: String,
 }
 

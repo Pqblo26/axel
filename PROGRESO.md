@@ -44,6 +44,11 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
   - Cada miembro lleva su propia habilidad pasiva (`passiveskill1`) y su resistencia a atributos (`resist_attr`); antes todos llevaban las de Kazuma.
   - PWR de los equipos: cada fila iba con 12 300 fijo (5 × 12 300 = 61 500). Ahora se calcula: base = ⌊0,35·vida + 3·(ataque + ataque mágico) + 1,5·(defensa + def. mágica)⌋; titular = base + 90; suplente = ⌊base × 0,3⌋ (0,4 si es el mismo personaje). Da exactos los valores de los 20 miembros de los datos capturados.
   - Afinidad: el login mandaba cambiados el nivel (`rank`) y los puntos (`rank_progress`); la afinidad sí se guardaba.
+- **Quinta tanda: avisos y equipos** (2026-11-12):
+  - Friends: el Greeting Log saltaba siempre porque el login mandaba la versión de Axel como saludo (aviso tipo 7, clave 27) y `greeting_list` devolvía un saludo falso de Megumin. Ya no hay saludos (no hay más jugadores).
+  - Misiones: el contador rojo venía de avisos fijos (clave 3 = 2, clave 13 = 7) y de un «misión completada» (11210001) en cada combate. Van a 0 hasta que las misiones sean reales.
+  - Equipos: Reset vacía el equipo y Suggest lo llena con los personajes más fuertes (uno por personaje: 5 titulares y luego suplentes).
+  - `scorechallenge_log` ya no falla cuando el juego no manda `event_id`.
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
 ## Qué falta

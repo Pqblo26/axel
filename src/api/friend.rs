@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use indoc::indoc;
 use jwt_simple::prelude::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use tracing::{debug, info, trace, warn};
@@ -174,26 +173,15 @@ struct GreetingData {
   pub first: bool,
 }
 
+/// Nobody else plays on this server, so there are no greetings: an always-present fake greeting
+/// opened the Greeting Log every time Friends was opened.
 pub async fn greeting_list(state: Arc<AppState>, session: Arc<Session>) -> impl IntoHandlerResponse {
   Ok(Signed(
     GreetingList {
       sent_count: 0,
-      received_count: 1,
-      greeting_data: vec![GreetingData {
-        user_no: "-1".to_owned(),
-        user_icon: 1083110,
-        user_name: "Megumin".to_owned(),
-        message: indoc! {"
-          Darkness blacker than black and darker than dark, I beseech thee, combine with my deep crimson.
-          The time of awakening cometh. Justice, fallen upon the infallible boundary, appear now as an
-          intangible distortion! Dance, Dance, Dance! I desire for my torrent of power a destructive force:
-          a destructive force without equal! Return all creation to cinders, and come from the abyss!
-          This is the mightiest means of attack known to man, the ultimate attack magic! EXPLOSION!!
-        "}
-        .to_owned(),
-        first: true,
-      }],
-      greeting_count: 1,
+      received_count: 0,
+      greeting_data: vec![],
+      greeting_count: 0,
     },
     session,
   ))
@@ -299,13 +287,7 @@ pub async fn greeting_send(
   Ok(Signed(
     GreetingSend {
       item_count: 0,
-      send_data: vec![GreetingSendData {
-        user_no: "-1".to_owned(),
-        user_icon: 1083110,
-        user_name: "Megumin".to_owned(),
-        profile_comment: "Nah.".to_owned(),
-        first: true,
-      }],
+      send_data: vec![],
     },
     session,
   ))
