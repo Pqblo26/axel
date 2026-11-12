@@ -111,7 +111,8 @@ pub async fn quest_hunting_list(state: Arc<AppState>, session: Arc<Session>) -> 
         HuntingLimitQuest {
           area_id,
           status: hunting_area_status(&progress, area_id, now),
-          limit: (row_int(area, "limit_count") - used).max(0),
+          // The game shows "{limit_count - limit} / {limit_count}", so this is the attempts used
+          limit: used.min(row_int(area, "limit_count")),
         }
       })
       .collect::<Vec<_>>(),

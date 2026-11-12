@@ -82,18 +82,18 @@ pub async fn save_member_exp(
   Ok((member_exp, remote))
 }
 
-/// Daily attempts left for a stage after this battle, 0 if it has no limit.
-fn attempts_left(stage: &StageInfo, progress: &crate::api::quest::progress::ProgressMap) -> i32 {
+/// Daily attempts used on a stage (or its free quest area) after this battle, 0 if it has no limit.
+/// The game shows the attempts left as the daily limit minus this.
+fn attempts_used(stage: &StageInfo, progress: &crate::api::quest::progress::ProgressMap) -> i32 {
   if stage.kind == StageKind::Hunting {
     let limit = hunting_area_limit(stage.area_id);
     if limit > 0 {
-      return (limit - area_daily_count(progress, StageKind::Hunting, stage.area_id)).max(0);
+      return area_daily_count(progress, StageKind::Hunting, stage.area_id).min(limit);
     }
   }
   let limit = main_stage_daily_limit(stage);
   if limit > 0 {
-    let used = progress.get(&stage.id).map(|entry| entry.daily_count).unwrap_or(0);
-    return (limit - used).max(0);
+    return progress.get(&stage.id).map(|entry| entry.daily_count).unwrap_or(0).min(limit);
   }
   0
 }
@@ -198,7 +198,7 @@ pub async fn finish_quest_battle(
   outcome.remote.extend(member_remote);
 
   let progress = load_progress(&transaction, user_id).await?;
-  outcome.limit = attempts_left(stage, &progress);
+  outcome.limit = attempts_used(stage, &progress);
 
   wallet.save(&transaction, user_id).await?;
   player.save(&transaction, user_id).await?;

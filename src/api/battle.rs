@@ -154,16 +154,13 @@ pub async fn make_battle_start(
     Some((quest_id, ratio)) => pay_quest_stamina(&client, session, quest_id, ratio).await?,
     None => Vec::new(),
   };
-  let party = FetchUserParty::new(&client)
-    .await?
-    .run(session.user_id, party_id as i64)
-    .await?;
+  let party = crate::api::battle::fetch_battle_party(&client, session.user_id, party_id as i64).await?;
 
   // We must send only members that are used in the party, otherwise hardlock occurs
   #[rustfmt::skip]
   let mut members = FetchUserMembersIn::new(&client)
     .await?
-    .run(session.user_id, &party.party_forms.iter().map(|form| form.main as i64).collect::<Vec<_>>())
+    .run(session.user_id, &party.member_ids())
     .await?;
   FetchUserMemberSkillsIn::new(&client)
     .await?
@@ -175,14 +172,23 @@ pub async fn make_battle_start(
     party: party.to_battle_party(),
     members: members
       .into_iter()
-      .map(|member| {
-        let form = party.party_forms.iter().find(|form| form.main == member.id).unwrap();
-        member.to_battle_member(form)
-      })
+      .filter_map(|member| Some(member.to_battle_member(party.form_of(member.id)?)))
       .collect(),
   }));
   response.remote.extend(stamina_remote);
   Ok(Unsigned(response))
+}
+
+/// A party as it fights: without the slots the player's rank has not unlocked yet.
+pub async fn fetch_battle_party(
+  client: &deadpool_postgres::Client,
+  user_id: crate::user::id::UserId,
+  party_id: i64,
+) -> anyhow::Result<Party> {
+  let mut party = FetchUserParty::new(client).await?.run(user_id, party_id).await?;
+  let progress = crate::user::progress::PlayerProgress::load(client, user_id).await?;
+  party.restrict_to_rank(progress.rank);
+  Ok(party)
 }
 
 // quest_id=101011
@@ -386,7 +392,7 @@ pub async fn make_battle_member_exp_and_character_love(
   #[rustfmt::skip]
   let members = FetchUserMembersIn::new(client)
     .await?
-    .run(session.user_id, &party.party_forms.iter().map(|form| form.main as i64).collect::<Vec<_>>())
+    .run(session.user_id, &party.member_ids())
     .await?;
 
   let characters = party
@@ -532,16 +538,13 @@ pub async fn marathon_single_start(
   let mut client = state.pool.get().await.context("failed to get database connection")?;
   let ticket_remote = pay_boss_tickets(&mut client, &session, &params).await?;
 
-  let party = FetchUserParty::new(&client)
-    .await?
-    .run(session.user_id, params.party_id as i64)
-    .await?;
+  let party = crate::api::battle::fetch_battle_party(&client, session.user_id, params.party_id as i64).await?;
 
   let fetch_members = FetchUserMembersIn::new(&client).await.unwrap();
   #[rustfmt::skip]
   let mut members = fetch_members.run(
     session.user_id,
-    &party.party_forms.iter().map(|form| form.main as i64).collect::<Vec<_>>(),
+    &party.member_ids(),
   ).await.unwrap();
   FetchUserMemberSkillsIn::new(&client)
     .await?
@@ -554,10 +557,7 @@ pub async fn marathon_single_start(
     // We must send only members that are used in the party, otherwise hardlock occurs?
     members: members
       .into_iter()
-      .map(|member| {
-        let form = party.party_forms.iter().find(|form| form.main == member.id).unwrap();
-        member.to_battle_member(form)
-      })
+      .filter_map(|member| Some(member.to_battle_member(party.form_of(member.id)?)))
       .collect(),
     get_log: true,
   }));
@@ -664,10 +664,7 @@ pub async fn marathon_single_result(
   warn!(?params, "encountered stub: marathon_single_result");
 
   let client = state.pool.get().await.context("failed to get database connection")?;
-  let party = FetchUserParty::new(&client)
-    .await?
-    .run(session.user_id, params.party_id as i64)
-    .await?;
+  let party = crate::api::battle::fetch_battle_party(&client, session.user_id, params.party_id as i64).await?;
 
   // Boss stages have no affinity reward in the masters
   let (member_exp, love) = make_battle_member_exp_and_character_love(&party, &client, &session, 0).await?;
