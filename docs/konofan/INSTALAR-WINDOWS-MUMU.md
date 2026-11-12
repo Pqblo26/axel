@@ -64,12 +64,12 @@ cd ~/axel && ./target/release/axel
 Espera a ver `api server started` y, **en otra ventana de Ubuntu**, comprueba que responde:
 
 ```bash
-curl --noproxy '*' --cacert ~/axel/certs/konofan.crt --resolve konofan.local:443:127.0.0.1 https://konofan.local/static/public.pem
+curl --noproxy '*' --cacert ~/axel/certs/konofan-ca.crt --resolve konofan.local:443:127.0.0.1 https://konofan.local/static/public.pem
 ```
 
 Debe salir un bloque `-----BEGIN PUBLIC KEY-----`.
 
-El script ha copiado el certificado para MuMu a `C:\Users\<tú>\konofan\XXXXXXXX.0` (el nombre exacto sale al final del script; lo llamo `XXXXXXXX.0` abajo).
+El script ha copiado el certificado para MuMu a `C:\Users\<tú>\konofan\XXXXXXXX.0` (el nombre exacto sale al final del script; lo llamo `XXXXXXXX.0` abajo). Es el de la **autoridad propia (CA)**, no el del servidor: la CA dura 10 años y firma un certificado de servidor que dura 397 días (Chrome no acepta más). Para renovar el del servidor basta con volver a ejecutar `setup-wsl.sh`; en MuMu no hay que tocar nada.
 
 **Copia local de los recursos (opcional, recomendado):** de momento los recursos del juego (~16 GiB) se piden al espejo de Assasans cuando hacen falta. Para no depender de él:
 

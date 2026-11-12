@@ -35,6 +35,7 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
 - **2026-11-11 — Servidor en WSL2 (Ubuntu 24.04) con red en espejo.** Axel y sus scripts están pensados para Linux; con `networkingMode=mirrored` el puerto 443 de WSL se ve desde Windows y MuMu sin redirecciones.
 - **2026-11-12 — MuMu entra por `10.0.2.2`** (el localhost de Windows visto desde el emulador), no por la IP de la LAN: con la red en espejo de WSL, Windows no reenvía a WSL el tráfico hacia su propia IP.
 - **2026-11-11 — Dominio `konofan.local` y certificado propio instalado como certificado de sistema en MuMu.** El cliente (Android 12+, OkHttp) no confía en certificados de usuario.
+- **2026-11-12 — CA propia que firma el certificado del servidor (397 días).** El certificado inicial hacía de CA y de servidor a la vez: el juego lo aceptaba, pero Chromium y el WebView (Note, Help) lo rechazaban en silencio. En MuMu solo se instala la CA, así que renovar el certificado del servidor no obliga a tocar el emulador.
 - **2026-11-11 — Recursos:** de momento se sirven desde el espejo de Assasans (`upstream-url`); `mirror-assets.sh` hace la copia local (~16 GiB) para no depender de él.
 - La clave RSA de firma (`key.pem`) es la pública del repo de Axel; para uso local da igual. Si algún día se comparte el servidor, generar una propia (ver `SERVER-SETUP.md`).
 
