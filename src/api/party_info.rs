@@ -8,6 +8,7 @@ use crate::member::{FetchUserMemberSkillsIn, FetchUserMembers, FetchUserParties}
 use crate::user::session::Session;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -182,7 +183,24 @@ pub async fn party_info(state: Arc<AppState>, session: Arc<Session>) -> impl Int
     .run(session.user_id, &mut members.iter_mut().collect::<Vec<_>>())
     .await?;
 
-  let parties = FetchUserParties::new(&client).await?.run(session.user_id).await?;
+  let mut parties = FetchUserParties::new(&client).await?.run(session.user_id).await?;
+  // PWR shown in the team screen: main member strength plus its sub members
+  let by_id = members.iter().map(|member| (member.id, member)).collect::<HashMap<_, _>>();
+  for party in &mut parties {
+    for form in party.party_forms.iter_mut() {
+      let Some(main) = by_id.get(&form.main) else {
+        form.strength = 0;
+        continue;
+      };
+      let mut strength = main.main_strength_value();
+      for sub_id in [form.sub1, form.sub2] {
+        if let Some(sub) = by_id.get(&sub_id) {
+          strength += sub.sub_strength_value(sub.prototype.character_id == main.prototype.character_id);
+        }
+      }
+      form.strength = strength;
+    }
+  }
 
   Ok(Signed(
     PartyWire {
