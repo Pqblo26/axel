@@ -87,8 +87,9 @@ pub async fn get_login_remote_data(state: &AppState, session: &Session) -> Vec<R
         CharacterParameter {
           id: character_id,
           character_id,
-          rank: intimacy,
-          rank_progress: get_intimacy_level_calculator().get_level(intimacy),
+          // Affinity level, and affinity points (absolute, see interaction.rs)
+          rank: get_intimacy_level_calculator().get_level(intimacy),
+          rank_progress: intimacy,
           sp_skill: vec![],
           character_enhance_stage_id_list: vec![0, 0, 0, 0],
           character_piece_board_stage_id_list: vec![100001001, 100002002, 100003003, 100004004],
