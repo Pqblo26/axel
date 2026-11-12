@@ -117,7 +117,7 @@ Se puede cortar con Ctrl+C y reanudar después.
 
 1. Descarga `jp.assasans.konofd.stub-v1.1.0-global-4.11.5-release.apk` (124 MB) de <https://github.com/Assasans/konofd-client-stub/releases/tag/v1.1.0>.
 2. Arrástralo a la ventana de MuMu para instalarlo. El APK es solo arm64; si MuMu dice que no es compatible, usa una instancia de Android 12 de 64 bits.
-3. Abre **KonoSuba: FD (stub)**, pon como servidor `https://konofan.local/static` y acepta la clave pública que te muestra (la descarga del propio servidor).
+3. Abre **KonoSuba: FD (stub)** y pon como servidor `https://konofan.local/static/` **con la barra final** (el juego pega `versions/...` detrás; sin la barra pide `/staticversions/...` y da *Connection Error*). Como *Patching method* elige **LoadMetadataFile (And64InlineHook)**: los métodos de hooking/escaneo de memoria se cierran al instante en MuMu porque su traductor ARM (libhoudini) los bloquea. Pulsa Check, acepta la clave pública (la descarga del propio servidor) y Launch Game.
 4. La primera carga descarga muchos recursos; es normal que tarde.
 
 ## Si algo falla
