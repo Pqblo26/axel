@@ -895,12 +895,10 @@ async fn load_clears<'a>(executor: impl Into<QueryExecutor<'a>>, user_id: UserId
   Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
 }
 
-pub async fn dungeon_status(state: Arc<AppState>, session: Arc<Session>) -> impl IntoHandlerResponse {
-  let client = state.get_database_client().await?;
-  let run = DungeonRun::load(&client, session.user_id).await?;
-  Ok(Unsigned(CallResponse::new_success(Box::new(DungeonStatusResponse {
-    area_id: run.map(|run| run.area_id).unwrap_or(0),
-  }))))
+/// Always "no area in progress". With an area id the game skips dungeon_list and dungeon_top and
+/// freezes resuming the area; through dungeon_top (challenging_area_id) it resumes it fine.
+pub async fn dungeon_status(_session: Arc<Session>) -> impl IntoHandlerResponse {
+  Ok(Unsigned(CallResponse::new_success(Box::new(DungeonStatusResponse { area_id: 0 }))))
 }
 
 pub async fn dungeon_list(state: Arc<AppState>, session: Arc<Session>) -> impl IntoHandlerResponse {
