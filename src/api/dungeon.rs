@@ -776,6 +776,11 @@ impl DungeonRun {
     list
   }
 
+  /// Still on the area's first floor, with nothing cleared yet.
+  fn on_first_floor(&self) -> bool {
+    self.clear_rank.is_none() && area_stages(self.area_id).first().map(|stage| int(stage, "id")) == Some(self.stage_id)
+  }
+
   fn stage_state(&self) -> anyhow::Result<DungeonStageState> {
     let stage = stage_row(self.stage_id)?;
     Ok(DungeonStageState {
@@ -970,7 +975,11 @@ pub async fn dungeon_top(
     .collect::<Vec<_>>();
 
   Ok(Unsigned(DungeonTopResponse {
+    // The game hangs resuming a run with dungeon_area_top until a floor has been cleared, so a run
+    // still on its first floor is reported as not started: the game then calls
+    // dungeon_area_challenge, which picks that run up again.
     challenging_area_id: run
+      .filter(|run| !run.on_first_floor())
       .map(|run| run.area_id)
       .filter(|area_id| areas.iter().any(|area| int(area, "id") == *area_id))
       .unwrap_or(0),
@@ -1070,6 +1079,27 @@ pub async fn dungeon_area_challenge(
   let member_num = int(area, "member_num").max(1) as usize;
   let first_stage = area_stages(params.area_id).first().map(|stage| int(stage, "id")).context("area has no floors")?;
   let client = state.get_database_client().await?;
+  // A run of this area still on its first floor goes on where it was (see dungeon_top)
+  let existing = DungeonRun::load(&client, session.user_id)
+    .await?
+    .filter(|run| run.area_id == params.area_id && run.on_first_floor());
+  if let Some(mut run) = existing {
+    // Nothing fought yet: take the team as it is now (it may have been changed with Suggest)
+    let untouched = run.member_hp.is_empty() && run.enemy_hp.is_empty() && run.knockouts == 0;
+    let team = if untouched {
+      let team = load_team(&client, session.user_id, None, member_num).await?;
+      run.members = team.iter().map(|member| member.id as i64).collect();
+      run.save(&client, session.user_id).await?;
+      team
+    } else {
+      load_team(&client, session.user_id, Some(&run.members), member_num).await?
+    };
+    info!(area_id = params.area_id, stage_id = run.stage_id, "dungeon run resumed");
+    return Ok(Unsigned(DungeonAreaChallengeResponse {
+      stage_state: run.stage_state()?,
+      party_set: build_party_set(&team, Some(&run)),
+    }));
+  }
   let team = load_team(&client, session.user_id, None, member_num).await?;
   let run = DungeonRun {
     area_id: params.area_id,
