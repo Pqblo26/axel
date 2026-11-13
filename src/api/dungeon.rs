@@ -829,7 +829,7 @@ fn max_hp(member: &Member) -> i32 {
   member.to_party_member().hp
 }
 
-/// Party for the next battle: the first 5 members still standing; the rest wait in reserve.
+/// Party for the next battle: members still standing first (the first 5 fight), then the ones down.
 fn build_party_set(team: &[Member], run: Option<&DungeonRun>) -> DungeonPartySet {
   let current_hp = |member: &Member| {
     run
@@ -858,8 +858,10 @@ fn build_party_set(team: &[Member], run: Option<&DungeonRun>) -> DungeonPartySet
   let ordered = standing.into_iter().chain(down).collect::<Vec<_>>();
   DungeonPartySet {
     stage_party_set: DungeonStagePartySet {
-      party: ordered.iter().take(5).copied().enumerate().map(form).collect(),
-      reserved_party: ordered.iter().skip(5).copied().enumerate().map(|(i, m)| form((i + 5, m))).collect(),
+      // The whole team goes in "party" (the game takes the first 5 into battle); a filled
+      // reserved_party freezes the game when entering an area
+      party: ordered.iter().copied().enumerate().map(form).collect(),
+      reserved_party: vec![],
       assist: 0,
       sub_assists: vec![],
       assist_remain_count: 0,
@@ -1106,7 +1108,7 @@ pub async fn dungeon_area_top(
       },
       unchoosed_benefit_id_list: preview_benefits(area),
       benefit_re_lottery_count: 0,
-      is_allow_trial: false,
+      is_allow_trial: true,
     }));
   };
   let mut run = run;
@@ -1138,9 +1140,9 @@ pub async fn dungeon_area_top(
     stage_state: run.stage_state()?,
     party_set: build_party_set(&team, Some(&run)),
     clear_info,
-    unchoosed_benefit_id_list: run.offered_list(),
+    unchoosed_benefit_id_list: if run.offered.is_empty() { preview_benefits(area) } else { run.offered_list() },
     benefit_re_lottery_count: run.relottery_count,
-    is_allow_trial: false,
+    is_allow_trial: true,
   }))
 }
 
@@ -1163,7 +1165,7 @@ pub async fn dungeon_stage_party_info(
   let team = load_team(&client, session.user_id, run.as_ref().map(|run| run.members.as_slice()), member_num).await?;
   Ok(Unsigned(DungeonStagePartyInfoResponse {
     party_set: build_party_set(&team, run.as_ref()),
-    is_allow_trial: false,
+    is_allow_trial: true,
   }))
 }
 
@@ -1256,7 +1258,8 @@ pub async fn dungeon_battle_defeat(
   let member_num = int(area_row(run.area_id)?, "member_num").max(1) as usize;
   let team = load_team(&client, session.user_id, Some(&run.members), member_num).await?;
   let party_set = build_party_set(&team, Some(&run));
-  for form in party_set.stage_party_set.party.iter().filter(|form| form.current_hp > 0) {
+  // The first 5 members still standing were the ones fighting
+  for form in party_set.stage_party_set.party.iter().filter(|form| form.current_hp > 0).take(5) {
     run.member_hp.insert(form.main as i64, 0);
     run.knockouts += 1;
   }
