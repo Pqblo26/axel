@@ -414,12 +414,14 @@ pub async fn party_offer(state: Arc<AppState>, request: ApiRequest, session: Arc
     }
   }
 
+  party.fix_special_skills();
+
   let transaction = client.transaction().await.context("failed to start transaction")?;
   for form in &party.party_forms {
     #[rustfmt::skip]
     transaction.execute(/* language=postgresql */ r#"
       update user_party_forms
-      set main_member_id = $4, sub1_member_id = $5, sub2_member_id = $6
+      set main_member_id = $4, sub1_member_id = $5, sub2_member_id = $6, special_skill_id = $7
       where user_id = $1 and party_id = $2 and form_id = $3
     "#, &[
       &session.user_id,
@@ -428,6 +430,7 @@ pub async fn party_offer(state: Arc<AppState>, request: ApiRequest, session: Arc
       &(form.main as i64),
       &(form.sub1 as i64),
       &(form.sub2 as i64),
+      &(form.specialskill.special_skill_id as i64),
     ]).await.context("failed to update party form")?;
   }
   transaction.commit().await.context("failed to commit transaction")?;
@@ -449,7 +452,7 @@ pub async fn party_reset(state: Arc<AppState>, request: ApiRequest, session: Arc
   #[rustfmt::skip]
   let forms = client.execute(/* language=postgresql */ r#"
     update user_party_forms
-    set main_member_id = 0, sub1_member_id = 0, sub2_member_id = 0, weapon_id = 0, accessory_id = 0
+    set main_member_id = 0, sub1_member_id = 0, sub2_member_id = 0, weapon_id = 0, accessory_id = 0, special_skill_id = 0
     where user_id = $1 and party_id = $2
   "#, &[&session.user_id, &(party_no as i64)]).await.context("failed to reset party")?;
   info!(?party_no, ?forms, "party reset");

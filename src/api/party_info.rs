@@ -73,6 +73,35 @@ impl Party {
     }
   }
 
+  /// Makes each formation's special skill one of its main member's. The team keeps the special
+  /// skill of the slot when Suggest, Reset or a new account change the main member, and the game
+  /// freezes when a character uses a special skill that is not theirs.
+  pub fn fix_special_skills(&mut self) {
+    let skills = crate::api::master_all::get_master_manager().get_master("skill_sp");
+    let members = crate::api::master_all::get_master_manager().get_master("member");
+    let int = |row: &serde_json::Value, key: &str| row[key].as_str().and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+    for form in self.party_forms.iter_mut() {
+      if form.main == 0 {
+        form.specialskill.special_skill_id = 0;
+        continue;
+      }
+      let main = form.main as i64;
+      let Some(character) = members.iter().find(|row| int(row, "id") == main).map(|row| int(row, "character_id")) else {
+        continue;
+      };
+      let fits = |row: &serde_json::Value| {
+        int(row, "character_id") == character && (int(row, "member_id") == 0 || int(row, "member_id") == main)
+      };
+      let current = form.specialskill.special_skill_id as i64;
+      if skills.iter().any(|row| int(row, "skill_id") == current && fits(row)) {
+        continue;
+      }
+      if let Some(skill) = skills.iter().filter(|row| fits(row) && int(row, "member_id") == 0).map(|row| int(row, "skill_id")).min() {
+        form.specialskill.special_skill_id = skill as i32;
+      }
+    }
+  }
+
   /// The formation a member is in, as main or sub member.
   pub fn form_of(&self, member_id: i32) -> Option<&PartyForm> {
     self
@@ -230,6 +259,7 @@ pub async fn party_info(state: Arc<AppState>, session: Arc<Session>) -> impl Int
   // PWR shown in the team screen: main member strength plus its sub members
   let by_id = members.iter().map(|member| (member.id, member)).collect::<HashMap<_, _>>();
   for party in &mut parties {
+    party.fix_special_skills();
     for form in party.party_forms.iter_mut() {
       let Some(main) = by_id.get(&form.main) else {
         form.strength = 0;
