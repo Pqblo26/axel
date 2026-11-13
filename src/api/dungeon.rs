@@ -597,6 +597,23 @@ fn stage_enemies(stage: &Value) -> Vec<(i64, i32)> {
     .collect()
 }
 
+/// The reward lot of the floor's wave, normal or rare by their weights, as the battle `chest`.
+fn stage_chest(stage: &Value) -> String {
+  let wave_id = stage["wave_id1"].as_str().unwrap_or("0");
+  let Some(wave) = get_master_manager()
+    .get_master("battle_wave")
+    .iter()
+    .find(|row| row["wave_id"].as_str() == Some(wave_id))
+  else {
+    return "10101111".to_owned();
+  };
+  let (normal, rare) = (int(wave, "questreward_id_normal"), int(wave, "questreward_id_rare"));
+  let (normal_weight, rare_weight) = (int(wave, "weight_normal").max(0), int(wave, "weight_rare").max(0));
+  let rare_wins = rare != 0 && (normal == 0 || rand::random_range(0..(normal_weight + rare_weight).max(1)) >= normal_weight);
+  let chest = if rare_wins { rare } else { normal };
+  if chest == 0 { "10101111".to_owned() } else { chest.to_string() }
+}
+
 /// The event dungeon that is open: the original ran one for a week at a time and they are all
 /// past now, so they take turns by week. Only dungeons with banner images in the asset mirror
 /// (1-10 and 15-27; 11-14 and 99 show a pink placeholder).
@@ -1263,7 +1280,8 @@ pub async fn dungeon_battle_start(
   }
 
   Ok(Unsigned(DungeonBattleStartResponse {
-    chest: "".to_string(),
+    // One chest (quest reward lot) per wave: with none the game ends the battle as won at once
+    chest: stage_chest(stage),
     party: BattleParty {
       party_forms: forms.try_into().map_err(|_| anyhow::anyhow!("party must have 5 forms"))?,
       assist: 0,
