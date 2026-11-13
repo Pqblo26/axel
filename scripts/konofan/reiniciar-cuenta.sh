@@ -44,7 +44,7 @@ begin
     'user_character_special_skills', 'user_character_skills', 'user_character_pieces', 'user_characters',
     'user_items', 'user_items_equipment', 'user_home_illustrations', 'user_presents', 'user_exchanges',
     'user_expeditions', 'user_shop_purchases', 'user_wallet', 'user_progress', 'user_quest_progress',
-    'user_dungeon_runs', 'user_dungeon_clears', 'user_dungeon_teams', 'user_score_challenge_best', 'user_score_challenge_runs',
+    'user_dungeon_runs', 'user_dungeon_clears', 'user_dungeon_teams', 'user_dungeon_traits', 'user_score_challenge_best', 'user_score_challenge_runs',
     'gacha.user_draws'
   ] loop
     if to_regclass(t) is not null then

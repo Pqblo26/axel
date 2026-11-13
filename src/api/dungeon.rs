@@ -878,7 +878,7 @@ fn max_hp(member: &Member) -> i32 {
 }
 
 /// Party for the next battle: members still standing first (the first 5 fight), then the ones down.
-fn build_party_set(team: &[Member], run: Option<&DungeonRun>) -> DungeonPartySet {
+fn build_party_set(team: &[Member], run: Option<&DungeonRun>, trait_id: i64) -> DungeonPartySet {
   let current_hp = |member: &Member| {
     run
       .and_then(|run| run.member_hp.get(&(member.id as i64)).copied())
@@ -913,7 +913,10 @@ fn build_party_set(team: &[Member], run: Option<&DungeonRun>) -> DungeonPartySet
       assist: 0,
       sub_assists: vec![],
       assist_remain_count: 0,
-      party_passive_skill: Default::default(),
+      party_passive_skill: PartyPassiveSkillInfo {
+        skill_id: trait_id,
+        user_member_id: 0,
+      },
     },
     team_members: team.iter().map(|member| member.to_party_member()).collect(),
     team_weapons: vec![],
@@ -1029,7 +1032,7 @@ pub async fn dungeon_team_info(
   let run = DungeonRun::load(&client, session.user_id).await?.filter(|run| run.area_id == params.area_id);
   let team = load_team(&client, session.user_id, run.as_ref().map(|run| run.members.as_slice()), member_num).await?;
   Ok(Unsigned(DungeonTeamInfoResponse {
-    team_set: team_set_from(build_party_set(&team, run.as_ref())),
+    team_set: team_set_from(build_party_set(&team, run.as_ref(), dungeon_trait(&client, session.user_id).await?)),
   }))
 }
 
@@ -1065,7 +1068,7 @@ pub async fn dungeon_team_offer(
   save_team(&client, session.user_id, &team).await?;
   info!(area_id = params.area_id, ?elements, stat = %params.priority_status, team = ?team.iter().map(|m| m.id).collect::<Vec<_>>(), "dungeon team suggested");
   Ok(Unsigned(DungeonTeamOfferResponse {
-    team_set: team_set_from(build_party_set(&team, None)),
+    team_set: team_set_from(build_party_set(&team, None, dungeon_trait(&client, session.user_id).await?)),
   }))
 }
 
@@ -1082,7 +1085,7 @@ pub async fn dungeon_team_reset(
   "#, &[&session.user_id]).await.context("failed to reset dungeon team")?;
   let team = load_team(&client, session.user_id, None, member_num).await?;
   Ok(Unsigned(DungeonTeamResetResponse {
-    team_set: team_set_from(build_party_set(&team, None)),
+    team_set: team_set_from(build_party_set(&team, None, dungeon_trait(&client, session.user_id).await?)),
   }))
 }
 
@@ -1114,7 +1117,7 @@ pub async fn dungeon_area_challenge(
     info!(area_id = params.area_id, stage_id = run.stage_id, "dungeon run resumed");
     return Ok(Unsigned(DungeonAreaChallengeResponse {
       stage_state: run.stage_state()?,
-      party_set: build_party_set(&team, Some(&run)),
+      party_set: build_party_set(&team, Some(&run), dungeon_trait(&client, session.user_id).await?),
     }));
   }
   let team = load_team(&client, session.user_id, None, member_num).await?;
@@ -1138,7 +1141,7 @@ pub async fn dungeon_area_challenge(
 
   Ok(Unsigned(DungeonAreaChallengeResponse {
     stage_state: run.stage_state()?,
-    party_set: build_party_set(&team, Some(&run)),
+    party_set: build_party_set(&team, Some(&run), dungeon_trait(&client, session.user_id).await?),
   }))
 }
 
@@ -1172,7 +1175,7 @@ pub async fn dungeon_area_top(
     return Ok(Unsigned(DungeonAreaTopResponse {
       is_practice: false,
       stage_state: preview.stage_state()?,
-      party_set: build_party_set(&team, None),
+      party_set: build_party_set(&team, None, dungeon_trait(&client, session.user_id).await?),
       clear_info: DungeonAreaClearInfo {
         clear_rank: 0,
         reward_items: vec![],
@@ -1209,7 +1212,7 @@ pub async fn dungeon_area_top(
   Ok(Unsigned(DungeonAreaTopResponse {
     is_practice: run.is_practice,
     stage_state: run.stage_state()?,
-    party_set: build_party_set(&team, Some(&run)),
+    party_set: build_party_set(&team, Some(&run), dungeon_trait(&client, session.user_id).await?),
     clear_info,
     unchoosed_benefit_id_list: if run.offered.is_empty() { preview_benefits(area) } else { run.offered_list() },
     benefit_re_lottery_count: run.relottery_count,
@@ -1225,6 +1228,37 @@ pub async fn dungeon_area_retire(state: Arc<AppState>, session: Arc<Session>) ->
   Ok(Unsigned(()))
 }
 
+/// The party trait chosen for dungeons (0 = none).
+async fn dungeon_trait(client: &deadpool_postgres::Client, user_id: UserId) -> anyhow::Result<i64> {
+  #[rustfmt::skip]
+  let row = client.query_opt(/* language=postgresql */ r#"
+    select skill_id from user_dungeon_traits where user_id = $1
+  "#, &[&user_id]).await.context("failed to load dungeon party trait")?;
+  Ok(row.map(|row| row.get(0)).unwrap_or(0))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DungeonStagePartyPassiveSkillChangeRequest {
+  pub area_id: i32,
+  pub skill_id: i64,
+}
+
+/// Party trait chosen in the dungeon party screen; kept for every dungeon until changed.
+pub async fn dungeon_stage_party_passive_skill_change(
+  state: Arc<AppState>,
+  session: Arc<Session>,
+  Params(params): Params<DungeonStagePartyPassiveSkillChangeRequest>,
+) -> impl IntoHandlerResponse {
+  let client = state.get_database_client().await?;
+  #[rustfmt::skip]
+  client.execute(/* language=postgresql */ r#"
+    insert into user_dungeon_traits (user_id, skill_id) values ($1, $2)
+    on conflict (user_id) do update set skill_id = excluded.skill_id, updated_at = now()
+  "#, &[&session.user_id, &params.skill_id]).await.context("failed to save dungeon party trait")?;
+  info!(skill_id = params.skill_id, "dungeon party trait changed");
+  Ok(dungeon_stage_party_info(state, session, Params(DungeonStagePartyInfoRequest { area_id: params.area_id })).await)
+}
+
 pub async fn dungeon_stage_party_info(
   state: Arc<AppState>,
   session: Arc<Session>,
@@ -1235,7 +1269,7 @@ pub async fn dungeon_stage_party_info(
   let run = DungeonRun::load(&client, session.user_id).await?.filter(|run| run.area_id == params.area_id);
   let team = load_team(&client, session.user_id, run.as_ref().map(|run| run.members.as_slice()), member_num).await?;
   Ok(Unsigned(DungeonStagePartyInfoResponse {
-    party_set: build_party_set(&team, run.as_ref()),
+    party_set: build_party_set(&team, run.as_ref(), dungeon_trait(&client, session.user_id).await?),
     is_allow_trial: true,
   }))
 }
@@ -1254,7 +1288,7 @@ pub async fn dungeon_battle_start(
     warn!(stage_id = params.stage_id, "dungeon battle on a floor that is not the current one");
   }
   let team = load_team(&client, session.user_id, run.as_ref().map(|run| run.members.as_slice()), member_num).await?;
-  let party_set = build_party_set(&team, run.as_ref());
+  let party_set = build_party_set(&team, run.as_ref(), dungeon_trait(&client, session.user_id).await?);
   let party = &party_set.stage_party_set.party;
   let fighting = party
     .iter()
@@ -1286,7 +1320,7 @@ pub async fn dungeon_battle_start(
       party_forms: forms.try_into().map_err(|_| anyhow::anyhow!("party must have 5 forms"))?,
       assist: 0,
       sub_assists: vec![],
-      party_passive_skill: Default::default(),
+      party_passive_skill: party_set.stage_party_set.party_passive_skill.clone(),
     },
     members: fighting.iter().take(5).map(|member| member.to_dungeon_battle_member()).collect(),
     resume_info: "".to_string(),
@@ -1329,7 +1363,7 @@ pub async fn dungeon_battle_defeat(
   };
   let member_num = int(area_row(run.area_id)?, "member_num").max(1) as usize;
   let team = load_team(&client, session.user_id, Some(&run.members), member_num).await?;
-  let party_set = build_party_set(&team, Some(&run));
+  let party_set = build_party_set(&team, Some(&run), dungeon_trait(&client, session.user_id).await?);
   // The first 5 members still standing were the ones fighting
   for form in party_set.stage_party_set.party.iter().filter(|form| form.current_hp > 0).take(5) {
     run.member_hp.insert(form.main as i64, 0);
