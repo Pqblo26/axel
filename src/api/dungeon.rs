@@ -45,9 +45,11 @@ pub struct DungeonAreaTopResponse {
   pub stage_state: DungeonStageState,
   pub party_set: DungeonPartySet,
   pub clear_info: DungeonAreaClearInfo,
-  /// Must have 3 elements; otherwise, client incorrectly displays empty slots.
-  /// NULLs are not allowed.
-  pub unchoosed_benefit_id_list: [i32; 3],
+  /// Benefits to choose from after clearing a floor. Must have 3 elements when present (otherwise
+  /// the client displays empty slots), and must be left out on the area's first floor and when
+  /// there is no run: its mere presence there makes the client hang or return to the title.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub unchoosed_benefit_id_list: Option<[i32; 3]>,
   /// Number of redraws used (not remaining).
   pub benefit_re_lottery_count: i32,
   pub is_allow_trial: bool,
@@ -998,11 +1000,7 @@ pub async fn dungeon_top(
     .collect::<Vec<_>>();
 
   Ok(Unsigned(DungeonTopResponse {
-    // The game hangs resuming a run with dungeon_area_top until a floor has been cleared, so a run
-    // still on its first floor is reported as not started: the game then calls
-    // dungeon_area_challenge, which picks that run up again.
     challenging_area_id: run
-      .filter(|run| !run.on_first_floor())
       .map(|run| run.area_id)
       .filter(|area_id| areas.iter().any(|area| int(area, "id") == *area_id))
       .unwrap_or(0),
@@ -1183,7 +1181,7 @@ pub async fn dungeon_area_top(
         clear_rank: 0,
         reward_items: vec![],
       },
-      unchoosed_benefit_id_list: preview_benefits(area),
+      unchoosed_benefit_id_list: None,
       benefit_re_lottery_count: 0,
       is_allow_trial: true,
     }));
@@ -1217,7 +1215,13 @@ pub async fn dungeon_area_top(
     stage_state: run.stage_state()?,
     party_set: build_party_set(&team, Some(&run), dungeon_trait(&client, session.user_id).await?),
     clear_info,
-    unchoosed_benefit_id_list: if run.offered.is_empty() { preview_benefits(area) } else { run.offered_list() },
+    unchoosed_benefit_id_list: if run.on_first_floor() {
+      None
+    } else if run.offered.is_empty() {
+      Some(preview_benefits(area))
+    } else {
+      Some(run.offered_list())
+    },
     benefit_re_lottery_count: run.relottery_count,
     is_allow_trial: true,
   }))
