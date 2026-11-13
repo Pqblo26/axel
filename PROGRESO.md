@@ -67,6 +67,8 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
   - Suggest aplica los filtros: elementos preferidos (hasta dos, por el atributo de las habilidades), estadística preferida y las casillas de titulares y suplentes.
   - Free Quest: los intentos diarios salían gastados (0/2). El juego muestra «límite − limit», así que hay que mandar los usados.
   - La estamina de rango 1 es 10 en el juego original (maestro `exp`, +5 por rango). Dungeon se desbloquea en rango 35.
+  - El combate se congelaba al lanzar una especial: cada fila del equipo guardaba la especial de su hueco (Kazuma, Aqua, Megumin, Darkness) aunque Suggest o Reset cambiaran el titular. Ahora la especial siempre es del titular (`Party::fix_special_skills`), al mostrar el equipo, al sugerir y al empezar el combate.
+  - `scripts/konofan/desbloquear-cuenta.sh <jugador> [rango]`: deja una cuenta de pruebas en rango 45 con toda la historia (Normal, Hard, Expert) y Free Quest superadas con 3 coronas, sin dar sus recompensas.
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
 ## Qué falta

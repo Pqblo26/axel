@@ -188,6 +188,7 @@ pub async fn fetch_battle_party(
   let mut party = FetchUserParty::new(client).await?.run(user_id, party_id).await?;
   let progress = crate::user::progress::PlayerProgress::load(client, user_id).await?;
   party.restrict_to_rank(progress.rank);
+  party.fix_special_skills();
   Ok(party)
 }
 
