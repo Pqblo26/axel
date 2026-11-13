@@ -4,7 +4,7 @@ use crate::api::master_all::get_master_manager;
 use crate::api::{RemoteData, RemoteDataItemType};
 use crate::database::QueryExecutor;
 use crate::user::id::UserId;
-use crate::user::wallet::set_singleton;
+use crate::blob::{AddSingletonItem, IntoRemoteData};
 use anyhow::Context;
 use std::sync::OnceLock;
 
@@ -109,10 +109,19 @@ impl PlayerProgress {
     gained
   }
 
-  /// Remote data that sets rank and experience on the client.
-  pub fn to_remote_data(&self) -> Vec<RemoteData> {
-    let mut remote = set_singleton(RemoteDataItemType::Level, self.rank);
-    remote.extend(set_singleton(RemoteDataItemType::Exp, self.exp));
+  /// Remote data that brings the client's rank and experience from `before` to these values.
+  ///
+  /// Only what was gained is added: setting them absolutely (delete everything, then add) makes
+  /// the client go through rank 0 on every result, so the result screen showed "Player Rank 1" and
+  /// replayed the tutorial of every feature unlocked by rank.
+  pub fn remote_since(&self, before: &PlayerProgress) -> Vec<RemoteData> {
+    let mut remote = Vec::new();
+    if self.rank > before.rank {
+      remote.extend(AddSingletonItem::new(RemoteDataItemType::Level, self.rank - before.rank).into_remote_data());
+    }
+    if self.exp > before.exp {
+      remote.extend(AddSingletonItem::new(RemoteDataItemType::Exp, self.exp - before.exp).into_remote_data());
+    }
     remote
   }
 }

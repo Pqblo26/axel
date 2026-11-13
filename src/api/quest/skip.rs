@@ -107,6 +107,7 @@ pub async fn skip_quests(
   wallet.add(RemoteDataItemType::Money, money)?;
 
   let mut player = PlayerProgress::load(&transaction, session.user_id).await?;
+  let player_before = player;
   let player_exp: i32 = runs.iter().map(|stage| stage.player_exp).sum();
   let lvup = player.add_exp(player_exp);
   if lvup > 0 {
@@ -168,6 +169,6 @@ pub async fn skip_quests(
       .collect::<Vec<RemoteData>>(),
   );
   response.remote.extend(wallet.to_remote_data());
-  response.remote.extend(player.to_remote_data());
+  response.remote.extend(player.remote_since(&player_before));
   Ok(response)
 }
