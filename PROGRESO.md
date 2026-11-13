@@ -69,6 +69,11 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
   - La estamina de rango 1 es 10 en el juego original (maestro `exp`, +5 por rango). Dungeon se desbloquea en rango 35.
   - El combate se congelaba al lanzar una especial: cada fila del equipo guardaba la especial de su hueco (Kazuma, Aqua, Megumin, Darkness) aunque Suggest o Reset cambiaran el titular. Ahora la especial siempre es del titular (`Party::fix_special_skills`), al mostrar el equipo, al sugerir y al empezar el combate.
   - `scripts/konofan/desbloquear-cuenta.sh <jugador> [rango]`: deja una cuenta de pruebas en rango 45 con toda la historia (Normal, Hard, Expert) y Free Quest superadas con 3 coronas, sin dar sus recompensas.
+- **Novena tanda: mazmorras y especiales** (2026-11-13):
+  - Dungeon se quedaba cargando al volver a entrar con una zona empezada: `dungeon_area_top` mandaba las bendiciones a elegir como `[0,0,0]` y las especiales a 0. Ahora siempre hay 3 bendiciones (también al empezar la zona) y cada miembro lleva su especial.
+  - Suggest en Dungeon aplica elementos y estadística, pone un miembro por personaje y el equipo se guarda (`user_dungeon_teams`, migración `20261113000001`) para entrar con él. Reset vuelve a los más fuertes.
+  - Especiales propias: las 10 variantes con especial exclusiva (`skill_sp.member_id`, p. ej. Aqua 1014200 → 101021) usan siempre la suya.
+  - Suggest todavía no pone armas, joyas, ayudante ni rasgo de fama: el servidor aún no maneja el equipo de los personajes en los equipos.
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
 ## Qué falta

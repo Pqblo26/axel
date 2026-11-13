@@ -614,6 +614,15 @@ fn current_dungeon_id(now: DateTime<Utc>) -> i32 {
   ids[week % ids.len()]
 }
 
+/// 3 benefits of an area, for an area that is only being looked at.
+fn preview_benefits(area: &Value) -> [i32; 3] {
+  let mut list = [0; 3];
+  for (index, id) in roll_benefits(area, &[]).into_iter().take(3).enumerate() {
+    list[index] = id;
+  }
+  list
+}
+
 /// Benefits offered after a floor: 3 different level 1 benefits of the area's group, not counting
 /// the ones already chosen.
 fn roll_benefits(area: &Value, chosen: &[i32]) -> Vec<i32> {
@@ -775,11 +784,45 @@ async fn load_team(client: &deadpool_postgres::Client, user_id: UserId, member_i
       Ok(team)
     }
     None => {
+      // The team chosen with Suggest, if any; otherwise the strongest members
+      #[rustfmt::skip]
+      let saved: Vec<i64> = client.query_opt(/* language=postgresql */ r#"
+        select members from user_dungeon_teams where user_id = $1
+      "#, &[&user_id]).await.context("failed to read dungeon team")?.map(|row| row.get(0)).unwrap_or_default();
+      let mut team = Vec::new();
+      for id in saved {
+        if let Some(index) = members.iter().position(|member| member.id as i64 == id) {
+          team.push(members.swap_remove(index));
+        }
+      }
       members.sort_by_key(|member| std::cmp::Reverse(member.main_strength_value()));
-      members.truncate(member_num);
-      Ok(members)
+      fill_team(&mut team, members, member_num);
+      Ok(team)
     }
   }
+}
+
+/// Completes a team up to [member_num] from [candidates] in order, one member per character.
+fn fill_team(team: &mut Vec<Member>, candidates: Vec<Member>, member_num: usize) {
+  team.truncate(member_num);
+  for member in candidates {
+    if team.len() >= member_num {
+      break;
+    }
+    if team.iter().all(|other| other.prototype.character_id != member.prototype.character_id) {
+      team.push(member);
+    }
+  }
+}
+
+async fn save_team(client: &deadpool_postgres::Client, user_id: UserId, team: &[Member]) -> anyhow::Result<()> {
+  let ids = team.iter().map(|member| member.id as i64).collect::<Vec<_>>();
+  #[rustfmt::skip]
+  client.execute(/* language=postgresql */ r#"
+    insert into user_dungeon_teams (user_id, members) values ($1, $2)
+    on conflict (user_id) do update set members = excluded.members, updated_at = now()
+  "#, &[&user_id, &ids]).await.context("failed to save dungeon team")?;
+  Ok(())
 }
 
 fn max_hp(member: &Member) -> i32 {
@@ -803,7 +846,7 @@ fn build_party_set(team: &[Member], run: Option<&DungeonRun>) -> DungeonPartySet
     acc: 0,
     strength: member.main_strength_value(),
     specialskill: SpecialSkillInfo {
-      special_skill_id: 0,
+      special_skill_id: crate::api::party_info::special_skill_for_member(member.id as i64, 0),
       trial: false,
     },
     skill_pa_fame: 0,
@@ -945,7 +988,30 @@ pub async fn dungeon_team_offer(
 ) -> impl IntoHandlerResponse {
   let member_num = int(area_row(params.area_id)?, "member_num").max(1) as usize;
   let client = state.get_database_client().await?;
-  let team = load_team(&client, session.user_id, None, member_num).await?;
+  let mut members = FetchUserMembers::new(&client).await?.run(session.user_id).await?;
+  FetchUserMemberSkillsIn::new(&client)
+    .await?
+    .run(session.user_id, &mut members.iter_mut().collect::<Vec<_>>())
+    .await?;
+  // Members of the chosen elements first, then by the chosen stat, one per character
+  let elements = params
+    .elemental
+    .iter()
+    .filter(|element| *element != "none" && !element.is_empty())
+    .cloned()
+    .collect::<Vec<_>>();
+  members.sort_by_cached_key(|member| {
+    let matches = !elements.is_empty()
+      && crate::api::party::member_elements(member).iter().any(|element| elements.contains(element));
+    (
+      std::cmp::Reverse(matches),
+      std::cmp::Reverse(crate::api::party::suggest_stat(member, &params.priority_status)),
+    )
+  });
+  let mut team = Vec::new();
+  fill_team(&mut team, members, member_num);
+  save_team(&client, session.user_id, &team).await?;
+  info!(area_id = params.area_id, ?elements, stat = %params.priority_status, team = ?team.iter().map(|m| m.id).collect::<Vec<_>>(), "dungeon team suggested");
   Ok(Unsigned(DungeonTeamOfferResponse {
     team_set: team_set_from(build_party_set(&team, None)),
   }))
@@ -958,6 +1024,10 @@ pub async fn dungeon_team_reset(
 ) -> impl IntoHandlerResponse {
   let member_num = int(area_row(params.area_id)?, "member_num").max(1) as usize;
   let client = state.get_database_client().await?;
+  #[rustfmt::skip]
+  client.execute(/* language=postgresql */ r#"
+    delete from user_dungeon_teams where user_id = $1
+  "#, &[&session.user_id]).await.context("failed to reset dungeon team")?;
   let team = load_team(&client, session.user_id, None, member_num).await?;
   Ok(Unsigned(DungeonTeamResetResponse {
     team_set: team_set_from(build_party_set(&team, None)),
@@ -983,7 +1053,8 @@ pub async fn dungeon_area_challenge(
     member_hp: HashMap::new(),
     enemy_hp: HashMap::new(),
     benefits: vec![],
-    offered: vec![],
+    // The area starts by choosing a benefit, like after each floor
+    offered: roll_benefits(area_row(params.area_id)?, &[]),
     relottery_count: 0,
     knockouts: 0,
     clear_rank: None,
@@ -1033,11 +1104,17 @@ pub async fn dungeon_area_top(
         clear_rank: 0,
         reward_items: vec![],
       },
-      unchoosed_benefit_id_list: [0; 3],
+      unchoosed_benefit_id_list: preview_benefits(area),
       benefit_re_lottery_count: 0,
       is_allow_trial: false,
     }));
   };
+  let mut run = run;
+  // The game freezes on a benefit list of zeros: there must always be 3 benefits to choose from
+  if run.clear_rank.is_none() && run.offered.is_empty() {
+    run.offered = roll_benefits(area, &run.benefits);
+    run.save(&client, session.user_id).await?;
+  }
 
   let team = load_team(&client, session.user_id, Some(&run.members), member_num).await?;
   let clear_info = DungeonAreaClearInfo {

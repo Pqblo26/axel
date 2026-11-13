@@ -304,7 +304,7 @@ pub async fn update_party_form(
 /// repeating a character in the team. Weapons and accessories are kept.
 /// Elements of a member: the attributes of its skills ("fire", "water", "thunder", "earth", "wind",
 /// "light", "cursed"), as the game's Suggest filter names them.
-fn member_elements(member: &crate::member::Member) -> Vec<String> {
+pub(crate) fn member_elements(member: &crate::member::Member) -> Vec<String> {
   let skills = get_master_manager().get_master("skill_ac");
   member
     .prototype
@@ -323,7 +323,7 @@ fn member_elements(member: &crate::member::Member) -> Vec<String> {
 }
 
 /// Value of the stat chosen in Suggest's "Preferred Stats" ("strength" is Power).
-fn suggest_stat(member: &crate::member::Member, stat: &str) -> i64 {
+pub(crate) fn suggest_stat(member: &crate::member::Member, stat: &str) -> i64 {
   let level = member.level();
   let stats = &member.stats;
   (match stat {
