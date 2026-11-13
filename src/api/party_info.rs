@@ -38,6 +38,35 @@ pub struct Party {
   pub party_passive_skill: PartyPassiveSkillInfo,
 }
 
+/// The special skill a member uses: its own if it has one (a different animation, master
+/// `skill_sp` with its `member_id`), otherwise [current] if it belongs to the member's character,
+/// otherwise the character's first one. 0 for an empty slot.
+pub fn special_skill_for_member(member_id: i64, current: i32) -> i32 {
+  if member_id == 0 {
+    return 0;
+  }
+  let masters = crate::api::master_all::get_master_manager();
+  let skills = masters.get_master("skill_sp");
+  let int = |row: &serde_json::Value, key: &str| row[key].as_str().and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+  let Some(character) = masters
+    .get_master("member")
+    .iter()
+    .find(|row| int(row, "id") == member_id)
+    .map(|row| int(row, "character_id"))
+  else {
+    return current;
+  };
+  let own = skills.iter().filter(|row| int(row, "member_id") == member_id).map(|row| int(row, "skill_id")).collect::<Vec<_>>();
+  if !own.is_empty() {
+    return if own.contains(&(current as i64)) { current } else { *own.iter().min().unwrap() as i32 };
+  }
+  let shared = |row: &&serde_json::Value| int(row, "character_id") == character && int(row, "member_id") == 0;
+  if skills.iter().filter(shared).any(|row| int(row, "skill_id") == current as i64) {
+    return current;
+  }
+  skills.iter().filter(shared).map(|row| int(row, "skill_id")).min().map_or(current, |skill| skill as i32)
+}
+
 impl Party {
   /// Every member in the party, main and sub members, without empty slots or repeats. The battle
   /// needs the data of all of them: a sub member missing from the battle members makes the game
@@ -77,28 +106,8 @@ impl Party {
   /// skill of the slot when Suggest, Reset or a new account change the main member, and the game
   /// freezes when a character uses a special skill that is not theirs.
   pub fn fix_special_skills(&mut self) {
-    let skills = crate::api::master_all::get_master_manager().get_master("skill_sp");
-    let members = crate::api::master_all::get_master_manager().get_master("member");
-    let int = |row: &serde_json::Value, key: &str| row[key].as_str().and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
     for form in self.party_forms.iter_mut() {
-      if form.main == 0 {
-        form.specialskill.special_skill_id = 0;
-        continue;
-      }
-      let main = form.main as i64;
-      let Some(character) = members.iter().find(|row| int(row, "id") == main).map(|row| int(row, "character_id")) else {
-        continue;
-      };
-      let fits = |row: &serde_json::Value| {
-        int(row, "character_id") == character && (int(row, "member_id") == 0 || int(row, "member_id") == main)
-      };
-      let current = form.specialskill.special_skill_id as i64;
-      if skills.iter().any(|row| int(row, "skill_id") == current && fits(row)) {
-        continue;
-      }
-      if let Some(skill) = skills.iter().filter(|row| fits(row) && int(row, "member_id") == 0).map(|row| int(row, "skill_id")).min() {
-        form.specialskill.special_skill_id = skill as i32;
-      }
+      form.specialskill.special_skill_id = special_skill_for_member(form.main as i64, form.specialskill.special_skill_id);
     }
   }
 
