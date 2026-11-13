@@ -90,6 +90,9 @@ pub struct DungeonStageEnemyState {
 #[derive(Debug, Serialize)]
 pub struct DungeonEnemyInfo {
   pub enemy_id: i64,
+  /// Named "hp" here (stage_state uses "current_hp"): with any other name the game reads 0 and
+  /// the enemies of the floor die as the battle starts.
+  #[serde(rename = "hp")]
   pub current_hp: i32,
 }
 
