@@ -626,17 +626,34 @@ fn preview_benefits(area: &Value) -> [i32; 3] {
 /// Benefits offered after a floor: 3 different level 1 benefits of the area's group, not counting
 /// the ones already chosen.
 fn roll_benefits(area: &Value, chosen: &[i32]) -> Vec<i32> {
+  // Benefit types are <lot group (2 digits)><slot 1-3><number>, and the game shows one benefit of
+  // each slot, in slot order (the slot is the icon_type column). A list in another order froze it.
+  // A type already chosen comes back at its next level.
   let group = area["benefit_lot_group"].as_str().unwrap_or("0").to_owned();
-  let pool = get_master_manager()
-    .get_master("dungeon_benefit_level")
-    .iter()
-    .filter(|row| row["level"].as_str() == Some("1") && row["benefit_type"].as_str().is_some_and(|t| t.starts_with(&group)))
-    .map(|row| int(row, "id"))
-    .filter(|id| !chosen.contains(id))
-    .collect::<Vec<_>>();
-  let mut picked = pool.choose_multiple(&mut rand::rng(), 3).copied().collect::<Vec<_>>();
-  picked.resize(3, 0);
-  picked
+  let levels = get_master_manager().get_master("dungeon_benefit_level");
+  let level_of = |id: i32| levels.iter().find(|row| int(row, "id") == id).map(|row| (row["benefit_type"].as_str().unwrap_or("").to_owned(), int(row, "level")));
+  let chosen_levels = chosen.iter().filter_map(|id| level_of(*id)).collect::<Vec<_>>();
+  (1..=3)
+    .map(|slot| {
+      let prefix = format!("{group}{slot}");
+      let candidates = levels
+        .iter()
+        .filter(|row| row["benefit_type"].as_str().is_some_and(|t| t.starts_with(&prefix)))
+        .filter(|row| {
+          let benefit_type = row["benefit_type"].as_str().unwrap_or("");
+          let next = chosen_levels
+            .iter()
+            .filter(|(chosen_type, _)| chosen_type == benefit_type)
+            .map(|(_, level)| level + 1)
+            .max()
+            .unwrap_or(1);
+          int(row, "level") == next
+        })
+        .map(|row| int(row, "id"))
+        .collect::<Vec<_>>();
+      candidates.choose(&mut rand::rng()).copied().unwrap_or(0)
+    })
+    .collect()
 }
 
 fn benefit_info(benefit_id: i32) -> Option<(String, i32)> {
