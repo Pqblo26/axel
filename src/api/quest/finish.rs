@@ -142,6 +142,7 @@ pub async fn finish_quest_battle(
 
   let mut wallet = Wallet::load(&transaction, user_id).await?;
   let mut player = PlayerProgress::load(&transaction, user_id).await?;
+  let player_before = player;
 
   // Stage drops and eris
   let mut rewards = stage.rewards.clone();
@@ -207,7 +208,7 @@ pub async fn finish_quest_battle(
   let (_, love) = make_battle_member_exp_and_character_love(&party, &client, session, stage.intimacy_exp).await?;
   outcome.love = love;
   outcome.remote.extend(wallet.to_remote_data());
-  outcome.remote.extend(player.to_remote_data());
+  outcome.remote.extend(player.remote_since(&player_before));
   info!(
     ?quest_id,
     firstclear = outcome.firstclear,
