@@ -31,6 +31,7 @@ pub mod maintenance_check;
 pub mod master_all;
 pub mod master_list;
 pub mod mission;
+pub mod mission_progress;
 pub mod notice;
 pub mod panel_mission;
 pub mod party;

@@ -393,6 +393,17 @@ async fn api_call(
       .await;
     let response = response.into_handler_response();
 
+    // Events counted for the Missions screen (logins, gacha pulls, ...)
+    if response.response.status == 0 && crate::api::mission_progress::is_counted(&method) {
+      if let Some(session) = session.as_ref() {
+        if let Ok(client) = state.get_database_client().await {
+          if let Err(error) = crate::api::mission_progress::count_call(&client, session.user_id, &method).await {
+            warn!(?error, "failed to count call for missions");
+          }
+        }
+      }
+    }
+
     let response_data = serde_json::to_string(&response.response).unwrap();
     if matches!(
       &*method,
