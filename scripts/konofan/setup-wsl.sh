@@ -135,6 +135,9 @@ server {
 
   location /static/ { proxy_pass http://127.0.0.1:2021/; }
   location /api/    { proxy_pass http://127.0.0.1:2020/; }
+  # The game launcher can forget the final "/" of https://$DOMAIN/static/; the game then asks for
+  # /staticversions/..., /staticbundles/... Send those to /static/...
+  location /static  { rewrite ^/static(.*)\$ /static/\$1 last; }
 }
 NGINX
 sudo ln -sf /etc/nginx/sites-available/axel /etc/nginx/sites-enabled/axel
