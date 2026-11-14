@@ -16,6 +16,9 @@ use crate::extractor::Params;
 use crate::handler::{IntoHandlerResponse, Signed, Unsigned};
 use crate::user::session::Session;
 use crate::AppState;
+use crate::user::grant::grant_items;
+use crate::user::wallet::Wallet;
+use anyhow::Context;
 
 #[derive(Debug, Serialize)]
 pub struct MissionList {
@@ -456,4 +459,75 @@ pub async fn marathon_boss_list(
     .collect::<Vec<_>>();
 
   Ok(Signed(MarathonBossList { bosses }, session))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MissionGetRequest {
+  #[serde(rename = "missionid")]
+  pub mission_id: i32,
+}
+
+// See [Wonder_Api_MissiongetResponseDto_Fields] (guessed: same goods lists as panel missions)
+#[derive(Debug, Serialize)]
+pub struct MissionGetResponse {
+  #[serde(rename = "goodsid")]
+  pub goods_id: Vec<crate::api::panel_mission::MissionGood>,
+  #[serde(rename = "unreceived_goodsid")]
+  pub unreceived_goods_id: Vec<crate::api::panel_mission::MissionGood>,
+}
+
+impl CallCustom for MissionGetResponse {}
+
+impl MissionGetResponse {
+  fn empty() -> Self {
+    MissionGetResponse { goods_id: vec![], unreceived_goods_id: vec![] }
+  }
+}
+
+// missionid=31220001
+/// "Accept" on a completed mission: gives its pack and marks it received.
+pub async fn mission_get(
+  state: Arc<AppState>,
+  session: Arc<Session>,
+  Params(params): Params<MissionGetRequest>,
+) -> impl IntoHandlerResponse {
+  let mut client = state.get_database_client().await?;
+  let Some(mission) = mission_progress::mission_row(params.mission_id) else {
+    warn!(?params, "unknown mission");
+    return Ok(Signed(CallResponse::new_success(Box::new(MissionGetResponse::empty())), session));
+  };
+  let progress = MissionState::load(&client, session.user_id).await?;
+  let value = progress.progress(mission);
+  let target = mission_progress::target(mission);
+  if progress.is_received(mission) || target.is_some_and(|target| value < target) {
+    warn!(?params, value, ?target, received = progress.is_received(mission), "mission not receivable");
+    return Ok(Signed(CallResponse::new_success(Box::new(MissionGetResponse::empty())), session));
+  }
+
+  let pack_id = mission["pack_id"].as_str().unwrap_or("0");
+  let items = crate::api::exchange::get_pack(pack_id)
+    .map(crate::api::exchange::pack_contents)
+    .unwrap_or_default();
+  let transaction = client.transaction().await.context("failed to start transaction")?;
+  let mut wallet = Wallet::load(&transaction, session.user_id).await?;
+  let mut remote = grant_items(&transaction, session.user_id, &mut wallet, &items).await?;
+  #[rustfmt::skip]
+  transaction.execute(/* language=postgresql */ r#"
+    insert into user_missions (user_id, mission_id) values ($1, $2)
+    on conflict (user_id, mission_id) do update set received_at = now()
+  "#, &[&session.user_id, &params.mission_id]).await.context("failed to save mission")?;
+  wallet.save(&transaction, session.user_id).await?;
+  transaction.commit().await.context("failed to commit transaction")?;
+  remote.extend(wallet.to_remote_data());
+  info!(mission_id = params.mission_id, pack_id, ?items, "mission received");
+
+  let mut response = CallResponse::new_success(Box::new(MissionGetResponse {
+    goods_id: items
+      .iter()
+      .map(|&(item_type, item_id, item_num)| crate::api::panel_mission::MissionGood { item_type, item_id, item_num })
+      .collect(),
+    unreceived_goods_id: vec![],
+  }));
+  response.remote.extend(remote);
+  Ok(Signed(response, session))
 }
