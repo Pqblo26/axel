@@ -2,7 +2,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_repr::{Deserialize_repr, Serialize_repr};
-use tracing::warn;
+use tracing::{info, warn};
+
+use crate::api::mission_progress::{self, MissionState};
 
 use crate::api::master_all::{get_master_manager, get_masters};
 use crate::api::{battle, ApiRequest};
@@ -53,44 +55,51 @@ pub struct MissionListRequest {
 }
 
 pub async fn mission_list(
+  state: Arc<AppState>,
   session: Arc<Session>,
   Params(params): Params<MissionListRequest>,
 ) -> impl IntoHandlerResponse {
-  warn!(?params, "encountered stub: mission_list");
+  let client = state.get_database_client().await?;
+  let progress = MissionState::load(&client, session.user_id).await?;
 
   let masters = get_masters().await;
   let missions: Vec<Value> = serde_json::from_str(&masters["mission"].master_decompressed).unwrap();
   let event_missions: Vec<Value> = serde_json::from_str(&masters["event_mission"].master_decompressed).unwrap();
 
-  let missions = missions
-    .into_iter()
-    .chain(event_missions.into_iter().take(100))
-    .map(|mission| {
-      let kind = mission.get("mission_type").unwrap().as_str().unwrap();
-      Mission {
-        mission_id: mission
-          .get("mission_id")
-          .unwrap()
-          .as_str()
-          .unwrap()
-          .parse::<i32>()
-          .unwrap(),
-        kind: match kind {
-          "NORMAL" => MissionKind::Normal as i32,
-          "DAILY" => MissionKind::Daily as i32,
-          "BEGINNER" => MissionKind::Beginner as i32,
-          "EVENT" => MissionKind::Event as i32,
-          _ => todo!("unknown mission type: {}", kind),
-        },
-        progress: 0,
-        received: 0,
-        newmisson: 0,
-        is_challenge: 1,
-      }
+  let kind_of = |mission: &Value| match mission["mission_type"].as_str().unwrap_or("") {
+    "DAILY" => MissionKind::Daily as i32,
+    "BEGINNER" => MissionKind::Beginner as i32,
+    "EVENT" => MissionKind::Event as i32,
+    _ => MissionKind::Normal as i32,
+  };
+  let mut list = missions
+    .iter()
+    .map(|mission| Mission {
+      mission_id: mission_progress::int(mission, "mission_id"),
+      kind: kind_of(mission),
+      progress: progress.progress(mission),
+      received: progress.is_received(mission) as i32,
+      newmisson: 0,
+      is_challenge: 1,
     })
-    .collect();
+    .collect::<Vec<_>>();
+  // Event missions have no progress yet
+  list.extend(event_missions.iter().take(100).map(|mission| Mission {
+    mission_id: mission_progress::int(mission, "mission_id"),
+    kind: kind_of(mission),
+    progress: 0,
+    received: 0,
+    newmisson: 0,
+    is_challenge: 1,
+  }));
+  let receivable = missions
+    .iter()
+    .filter(|mission| !progress.is_received(mission))
+    .filter(|mission| mission_progress::target(mission).is_some_and(|target| progress.progress(mission) >= target))
+    .count();
+  info!(kind = %params.kind, receivable, "mission list");
 
-  Ok(Signed(MissionList { missions }, session))
+  Ok(Signed(MissionList { missions: list }, session))
 }
 
 #[derive(Debug, Serialize)]
