@@ -819,62 +819,138 @@ impl DungeonRun {
   }
 }
 
+/// Sub members and special skill of one formation of the dungeon team, by its main member.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct TeamFormExtra {
+  main: i64,
+  #[serde(default)]
+  sub1: i64,
+  #[serde(default)]
+  sub2: i64,
+  #[serde(default)]
+  special: i64,
+}
+
+/// Dungeon team: the main members (one per formation, derefs to them) plus their subs.
+struct Team {
+  mains: Vec<Member>,
+  /// Members used as subs, with skills
+  subs: Vec<Member>,
+  forms: Vec<TeamFormExtra>,
+}
+
+impl std::ops::Deref for Team {
+  type Target = [Member];
+
+  fn deref(&self) -> &[Member] {
+    &self.mains
+  }
+}
+
+impl Team {
+  fn extra(&self, main: i32) -> Option<&TeamFormExtra> {
+    self.forms.iter().find(|form| form.main == main as i64)
+  }
+
+  fn sub_member(&self, id: i64) -> Option<&Member> {
+    (id != 0).then(|| self.subs.iter().find(|member| member.id as i64 == id)).flatten()
+  }
+
+  /// Subs of a main member's formation (existing members only).
+  fn subs_of(&self, main: i32) -> Vec<&Member> {
+    self
+      .extra(main)
+      .map(|form| [form.sub1, form.sub2].into_iter().filter_map(|id| self.sub_member(id)).collect())
+      .unwrap_or_default()
+  }
+
+  /// Keeps only valid subs: existing members, not used as a main, not twice, one per character.
+  fn from_parts(mains: Vec<Member>, mut rest: Vec<Member>, saved: Vec<TeamFormExtra>) -> Self {
+    let mut characters = mains.iter().map(|member| member.prototype.character_id).collect::<Vec<_>>();
+    let mut subs = Vec::new();
+    let mut forms = Vec::new();
+    for main in &mains {
+      let mut form = saved
+        .iter()
+        .find(|form| form.main == main.id as i64)
+        .cloned()
+        .unwrap_or_else(|| TeamFormExtra { main: main.id as i64, ..Default::default() });
+      for slot in [&mut form.sub1, &mut form.sub2] {
+        let Some(index) = rest.iter().position(|member| member.id as i64 == *slot && *slot != 0) else {
+          *slot = 0;
+          continue;
+        };
+        if characters.contains(&rest[index].prototype.character_id) {
+          *slot = 0;
+          continue;
+        }
+        characters.push(rest[index].prototype.character_id);
+        subs.push(rest.swap_remove(index));
+      }
+      forms.push(form);
+    }
+    Team { mains, subs, forms }
+  }
+}
+
+async fn load_saved_team(client: &deadpool_postgres::Client, user_id: UserId) -> anyhow::Result<(Vec<i64>, Vec<TeamFormExtra>)> {
+  #[rustfmt::skip]
+  let row = client.query_opt(/* language=postgresql */ r#"
+    select members, forms from user_dungeon_teams where user_id = $1
+  "#, &[&user_id]).await.context("failed to read dungeon team")?;
+  Ok(match row {
+    Some(row) => (row.get(0), serde_json::from_value(row.get::<_, Value>(1)).unwrap_or_default()),
+    None => (Vec::new(), Vec::new()),
+  })
+}
+
 /// Team members (with skills), strongest first, for a new run: `member_num` of the user's members.
-async fn load_team(client: &deadpool_postgres::Client, user_id: UserId, member_ids: Option<&[i64]>, member_num: usize) -> anyhow::Result<Vec<Member>> {
+async fn load_team(client: &deadpool_postgres::Client, user_id: UserId, member_ids: Option<&[i64]>, member_num: usize) -> anyhow::Result<Team> {
   let mut members = FetchUserMembers::new(client).await?.run(user_id).await?;
   FetchUserMemberSkillsIn::new(client)
     .await?
     .run(user_id, &mut members.iter_mut().collect::<Vec<_>>())
     .await?;
-  match member_ids {
-    Some(ids) => {
-      let mut team = Vec::new();
-      for id in ids {
-        if let Some(index) = members.iter().position(|member| member.id as i64 == *id) {
-          team.push(members.swap_remove(index));
-        }
-      }
-      Ok(team)
-    }
-    None => {
-      // The team chosen with Suggest, if any; otherwise the strongest members
-      #[rustfmt::skip]
-      let saved: Vec<i64> = client.query_opt(/* language=postgresql */ r#"
-        select members from user_dungeon_teams where user_id = $1
-      "#, &[&user_id]).await.context("failed to read dungeon team")?.map(|row| row.get(0)).unwrap_or_default();
-      let mut team = Vec::new();
-      for id in saved {
-        if let Some(index) = members.iter().position(|member| member.id as i64 == id) {
-          team.push(members.swap_remove(index));
-        }
-      }
-      members.sort_by_key(|member| std::cmp::Reverse(member.main_strength_value()));
-      fill_team(&mut team, members, member_num);
-      Ok(team)
+  // The team chosen in the team screen (or with Suggest), if any; otherwise the strongest members
+  let (saved, forms) = load_saved_team(client, user_id).await?;
+  let mut team = Vec::new();
+  for id in member_ids.unwrap_or(&saved) {
+    if let Some(index) = members.iter().position(|member| member.id as i64 == *id) {
+      team.push(members.swap_remove(index));
     }
   }
+  if member_ids.is_none() {
+    members.sort_by_key(|member| std::cmp::Reverse(member.main_strength_value()));
+    let mut candidates = members;
+    fill_team(&mut team, &mut candidates, member_num);
+    members = candidates;
+  }
+  Ok(Team::from_parts(team, members, forms))
 }
 
 /// Completes a team up to [member_num] from [candidates] in order, one member per character.
-fn fill_team(team: &mut Vec<Member>, candidates: Vec<Member>, member_num: usize) {
+/// The members taken leave [candidates].
+fn fill_team(team: &mut Vec<Member>, candidates: &mut Vec<Member>, member_num: usize) {
   team.truncate(member_num);
-  for member in candidates {
-    if team.len() >= member_num {
-      break;
-    }
-    if team.iter().all(|other| other.prototype.character_id != member.prototype.character_id) {
-      team.push(member);
+  let mut index = 0;
+  while index < candidates.len() && team.len() < member_num {
+    let character = candidates[index].prototype.character_id;
+    if team.iter().all(|other| other.prototype.character_id != character) {
+      team.push(candidates.remove(index));
+    } else {
+      index += 1;
     }
   }
 }
 
-async fn save_team(client: &deadpool_postgres::Client, user_id: UserId, team: &[Member]) -> anyhow::Result<()> {
+async fn save_team(client: &deadpool_postgres::Client, user_id: UserId, team: &Team) -> anyhow::Result<()> {
   let ids = team.iter().map(|member| member.id as i64).collect::<Vec<_>>();
+  let forms = serde_json::to_value(&team.forms)?;
   #[rustfmt::skip]
   client.execute(/* language=postgresql */ r#"
-    insert into user_dungeon_teams (user_id, members) values ($1, $2)
-    on conflict (user_id) do update set members = excluded.members, updated_at = now()
-  "#, &[&user_id, &ids]).await.context("failed to save dungeon team")?;
+    insert into user_dungeon_teams (user_id, members, forms) values ($1, $2, $3)
+    on conflict (user_id) do update set members = excluded.members, forms = excluded.forms, updated_at = now()
+  "#, &[&user_id, &ids, &forms]).await.context("failed to save dungeon team")?;
   Ok(())
 }
 
@@ -883,29 +959,41 @@ fn max_hp(member: &Member) -> i32 {
 }
 
 /// Party for the next battle: members still standing first (the first 5 fight), then the ones down.
-fn build_party_set(team: &[Member], run: Option<&DungeonRun>, trait_id: i64) -> DungeonPartySet {
+fn build_party_set(team: &Team, run: Option<&DungeonRun>, trait_id: i64) -> DungeonPartySet {
   let current_hp = |member: &Member| {
     run
       .and_then(|run| run.member_hp.get(&(member.id as i64)).copied())
       .unwrap_or_else(|| max_hp(member))
   };
-  let form = |(index, member): (usize, &Member)| DungeonStagePartyForm {
-    id: 1,
-    form_no: index as i32 + 1,
-    main: member.id,
-    sub1: 0,
-    sub2: 0,
-    weapon: 0,
-    acc: 0,
-    strength: member.main_strength_value(),
-    specialskill: SpecialSkillInfo {
-      special_skill_id: crate::api::party_info::special_skill_for_member(member.id as i64, 0),
-      trial: false,
-    },
-    skill_pa_fame: 0,
-    current_hp: current_hp(member),
-    max_hp: max_hp(member),
-    current_sp: 0,
+  let form = |(index, member): (usize, &Member)| {
+    let extra = team.extra(member.id);
+    let sub = |id: i64| team.sub_member(id).map(|sub| sub.id).unwrap_or(0);
+    DungeonStagePartyForm {
+      id: 1,
+      form_no: index as i32 + 1,
+      main: member.id,
+      sub1: extra.map(|extra| sub(extra.sub1)).unwrap_or(0),
+      sub2: extra.map(|extra| sub(extra.sub2)).unwrap_or(0),
+      weapon: 0,
+      acc: 0,
+      strength: member.main_strength_value()
+        + team
+          .subs_of(member.id)
+          .iter()
+          .map(|sub| sub.sub_strength_value(sub.prototype.character_id == member.prototype.character_id))
+          .sum::<i32>(),
+      specialskill: SpecialSkillInfo {
+        special_skill_id: crate::api::party_info::special_skill_for_member(
+          member.id as i64,
+          extra.map(|extra| extra.special as i32).unwrap_or(0),
+        ),
+        trial: false,
+      },
+      skill_pa_fame: 0,
+      current_hp: current_hp(member),
+      max_hp: max_hp(member),
+      current_sp: 0,
+    }
   };
   let (standing, down): (Vec<&Member>, Vec<&Member>) = team.iter().partition(|member| current_hp(member) > 0);
   let ordered = standing.into_iter().chain(down).collect::<Vec<_>>();
@@ -923,7 +1011,7 @@ fn build_party_set(team: &[Member], run: Option<&DungeonRun>, trait_id: i64) -> 
         user_member_id: 0,
       },
     },
-    team_members: team.iter().map(|member| member.to_party_member()).collect(),
+    team_members: team.iter().chain(&team.subs).map(|member| member.to_party_member()).collect(),
     team_weapons: vec![],
     team_accessories: vec![],
   }
@@ -1064,10 +1152,46 @@ pub async fn dungeon_team_offer(
       std::cmp::Reverse(crate::api::party::suggest_stat(member, &params.priority_status)),
     )
   });
-  let mut team = Vec::new();
-  fill_team(&mut team, members, member_num);
+  // Unticked "Main" keeps the current main members; unticked "Sub" keeps the current subs
+  let current = load_team(&client, session.user_id, None, member_num).await?;
+  let progress = crate::user::progress::PlayerProgress::load(&client, session.user_id).await?;
+  let subs_open = progress.rank >= crate::user::progress::content_unlock_rank("SUBPARTY");
+  let mut mains = Vec::new();
+  if params.main == 0 {
+    for main in current.iter() {
+      if let Some(index) = members.iter().position(|member| member.id == main.id) {
+        mains.push(members.remove(index));
+      }
+    }
+  }
+  fill_team(&mut mains, &mut members, member_num);
+  let forms = if !subs_open {
+    Vec::new()
+  } else if params.sub == 0 {
+    current.forms.clone()
+  } else {
+    // Best remaining members of other characters, two per formation in order
+    let mut characters = mains.iter().map(|member| member.prototype.character_id).collect::<Vec<_>>();
+    let mut candidates = members.iter().filter(|member| {
+      let fresh = !characters.contains(&member.prototype.character_id);
+      if fresh {
+        characters.push(member.prototype.character_id);
+      }
+      fresh
+    });
+    mains
+      .iter()
+      .map(|main| TeamFormExtra {
+        main: main.id as i64,
+        sub1: candidates.next().map(|member| member.id as i64).unwrap_or(0),
+        sub2: candidates.next().map(|member| member.id as i64).unwrap_or(0),
+        special: current.extra(main.id).map(|form| form.special).unwrap_or(0),
+      })
+      .collect()
+  };
+  let team = Team::from_parts(mains, members, forms);
   save_team(&client, session.user_id, &team).await?;
-  info!(area_id = params.area_id, ?elements, stat = %params.priority_status, team = ?team.iter().map(|m| m.id).collect::<Vec<_>>(), "dungeon team suggested");
+  info!(area_id = params.area_id, ?elements, stat = %params.priority_status, team = ?team.forms.iter().map(|form| (form.main, form.sub1, form.sub2)).collect::<Vec<_>>(), "dungeon team suggested");
   Ok(Unsigned(DungeonTeamOfferResponse {
     team_set: team_set_from(build_party_set(&team, None, dungeon_trait(&client, session.user_id).await?)),
   }))
@@ -1087,6 +1211,84 @@ pub async fn dungeon_team_reset(
   let team = load_team(&client, session.user_id, None, member_num).await?;
   Ok(Unsigned(DungeonTeamResetResponse {
     team_set: team_set_from(build_party_set(&team, None, dungeon_trait(&client, session.user_id).await?)),
+  }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateDungeonTeamFormRequest {
+  pub area_id: i32,
+  /// JSON array of the team's formations, see [crate::api::party::PartyFormInfoRequestDto]
+  pub form_info: String,
+}
+
+// area_id=11
+// form_info=[{"form_no":1,"main":1084217,"sub1":1004142,"sub2":0,"weapon":0,"acc":0,"special_skill":{"special_skill_id":108001,"trial":false},"skill_pa_fame":0},...]
+/// Team screen of an area: the player changed a main, a sub or a special skill by hand.
+pub async fn update_dungeon_team_form(
+  state: Arc<AppState>,
+  session: Arc<Session>,
+  Params(params): Params<UpdateDungeonTeamFormRequest>,
+) -> impl IntoHandlerResponse {
+  let member_num = int(area_row(params.area_id)?, "member_num").max(1) as usize;
+  let mut forms: Vec<crate::api::party::PartyFormInfoRequestDto> =
+    serde_json::from_str(&params.form_info).context("bad form_info")?;
+  forms.sort_by_key(|form| form.form_no);
+  let mains = forms
+    .iter()
+    .map(|form| form.main)
+    .filter(|id| *id != 0)
+    .collect::<Vec<_>>();
+  let extras = forms
+    .iter()
+    .filter(|form| form.main != 0)
+    .map(|form| TeamFormExtra {
+      main: form.main,
+      sub1: form.sub1,
+      sub2: form.sub2,
+      special: form.special_skill.special_skill_id,
+    })
+    .collect::<Vec<_>>();
+
+  let client = state.get_database_client().await?;
+  let mut members = FetchUserMembers::new(&client).await?.run(session.user_id).await?;
+  FetchUserMemberSkillsIn::new(&client)
+    .await?
+    .run(session.user_id, &mut members.iter_mut().collect::<Vec<_>>())
+    .await?;
+  let mut team = Vec::new();
+  for id in &mains {
+    if let Some(index) = members.iter().position(|member| member.id as i64 == *id) {
+      team.push(members.swap_remove(index));
+    }
+  }
+  team.truncate(member_num);
+  let team = Team::from_parts(team, members, extras);
+  save_team(&client, session.user_id, &team).await?;
+
+  // A run of this area with nothing fought yet takes the new team (see dungeon_area_challenge)
+  let mut run = DungeonRun::load(&client, session.user_id)
+    .await?
+    .filter(|run| run.area_id == params.area_id);
+  if let Some(run) = run.as_mut() {
+    if run.on_first_floor() && run.member_hp.is_empty() && run.enemy_hp.is_empty() && run.knockouts == 0 {
+      run.members = team.iter().map(|member| member.id as i64).collect();
+      run.save(&client, session.user_id).await?;
+    }
+  }
+  info!(area_id = params.area_id, team = ?team.forms.iter().map(|form| (form.main, form.sub1, form.sub2)).collect::<Vec<_>>(), "dungeon team changed");
+  let team = load_team(
+    &client,
+    session.user_id,
+    run.as_ref().map(|run| run.members.as_slice()),
+    member_num,
+  )
+  .await?;
+  Ok(Unsigned(DungeonTeamInfoResponse {
+    team_set: team_set_from(build_party_set(
+      &team,
+      run.as_ref(),
+      dungeon_trait(&client, session.user_id).await?,
+    )),
   }))
 }
 
@@ -1317,7 +1519,10 @@ pub async fn dungeon_battle_start(
     })
     .collect::<Vec<_>>();
   for (index, member) in fighting.iter().take(5).enumerate() {
+    let extra = team.extra(member.id);
     forms[index].main = member.id;
+    forms[index].sub1 = extra.map(|extra| extra.sub1 as i32).unwrap_or(0);
+    forms[index].sub2 = extra.map(|extra| extra.sub2 as i32).unwrap_or(0);
   }
 
   Ok(Unsigned(DungeonBattleStartResponse {
@@ -1329,7 +1534,12 @@ pub async fn dungeon_battle_start(
       sub_assists: vec![],
       party_passive_skill: party_set.stage_party_set.party_passive_skill.clone(),
     },
-    members: fighting.iter().take(5).map(|member| member.to_dungeon_battle_member()).collect(),
+    members: fighting
+      .iter()
+      .take(5)
+      .flat_map(|member| std::iter::once(*member).chain(team.subs_of(member.id)))
+      .map(|member| member.to_dungeon_battle_member())
+      .collect(),
     resume_info: "".to_string(),
     livemembers: party
       .iter()
@@ -1506,7 +1716,7 @@ pub async fn dungeon_select_benefit(
     let team = load_team(&client, session.user_id, Some(&run.members), member_num).await?;
     match benefit_info(params.benefit_id) {
       Some((category, value)) if category == "HP_RECOVERY" => {
-        for member in &team {
+        for member in team.iter() {
           let id = member.id as i64;
           let max = max_hp(member);
           if let Some(hp) = run.member_hp.get(&id).copied().filter(|hp| *hp > 0) {

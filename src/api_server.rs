@@ -170,6 +170,7 @@ async fn api_call(
     .handle("dungeon_area_challenge", dungeon::dungeon_area_challenge)
     .handle("dungeon_stage_party_info", dungeon::dungeon_stage_party_info)
     .handle("dungeon_stage_party_passive_skill_change", dungeon::dungeon_stage_party_passive_skill_change)
+    .handle("update_dungeon_team_form", dungeon::update_dungeon_team_form)
     .handle("dungeon_battle_start", dungeon::dungeon_battle_start)
     .handle("dungeon_battle_defeat", dungeon::dungeon_battle_defeat)
     .handle("dungeon_team_offer", dungeon::dungeon_team_offer)
