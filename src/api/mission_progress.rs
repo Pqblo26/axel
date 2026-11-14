@@ -22,6 +22,7 @@ const COUNTED_CALLS: &[(&str, &str)] = &[
   ("gachadaily", "gacha"),
   ("expeditionset", "expedition"),
   ("scorechallengestart", "score"),
+  ("missionhome", "home_chara"),
 ];
 
 pub fn is_counted(method: &str) -> bool {
@@ -173,7 +174,16 @@ impl MissionState {
       "player_login" => self.counter("login").days,
       "time" => 1,
       "all_daily" => self.received_of_type("DAILY", "all_daily"),
-      "all_beginner" => self.received_of_type("BEGINNER", "all_beginner"),
+      // The client shows it as done (1/1) with any value: 1 only once every other one is received
+      "all_beginner" => {
+        let others = get_master_manager()
+          .get_master("mission")
+          .iter()
+          .filter(|row| row["mission_type"].as_str() == Some("BEGINNER") && row["rule"].as_str() != Some("all_beginner"))
+          .count() as i32;
+        (self.received_of_type("BEGINNER", "all_beginner") >= others) as i32
+      }
+      "player_home_chara" => (self.counter("home_chara").total > 0) as i32,
       _ => 0,
     }
   }
@@ -207,13 +217,7 @@ pub fn target(mission: &Value) -> Option<i32> {
           .count() as i32,
       )
     }
-    "all_beginner" => Some(
-      get_master_manager()
-        .get_master("mission")
-        .iter()
-        .filter(|row| row["mission_type"].as_str() == Some("BEGINNER") && row["rule"].as_str() != Some("all_beginner"))
-        .count() as i32,
-    ),
+    "all_beginner" => Some(1),
     "time" => Some(1),
     _ => Some(int(mission, "rule_x")).filter(|x| *x > 0),
   }
