@@ -77,6 +77,13 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
   - Combates de mazmorra que se ganaban solos: en `dungeon_battle_start`, la vida de los enemigos va en `hp` (no `current_hp`); con otro nombre el juego leía 0. Además se manda el `chest` de la oleada.
   - Rasgo del equipo en mazmorras (`dungeon_stage_party_passive_skill_change`, tabla `user_dungeon_traits`). El diálogo se queda abierto tras cambiarlo (pasa de «Change» a «Remove»); se cierra con Close.
   - Suggest todavía no pone armas, joyas, ayudante ni rasgo de fama: el servidor aún no maneja el equipo de los personajes en los equipos.
+- **Décima tanda: probando solo en MuMu** (2026-11-13 y 14, Claude juega por adb):
+  - Tras un combate salía «Player Rank 1» y se repetían los tutoriales: el resultado borraba y volvía a sumar rango y experiencia. Ahora solo se suma lo ganado.
+  - El lanzador quita la barra final de la URL (`…/static`) y daba 404: nginx la acepta con y sin barra.
+  - Equipo de la mazmorra: suplentes y cambios a mano (`update_dungeon_team_form`, columna `forms` en `user_dungeon_teams`, migración `20261114000001`). Suggest pone suplentes y respeta las casillas Main/Sub. Los combates llevan los suplentes. Probado con un combate.
+  - Misiones (Novice, Regular, Daily): progreso real calculado desde lo guardado (misiones, capítulos, coronas, rango, miembros) y contadores nuevos (días de login, tiradas, trabajos, Arena) en `user_mission_counters`. Recoger (`missionget`) da el pack de la misión y la guarda en `user_missions` (las diarias se renuevan cada día, hora de Japón). Migración `20261114000002`.
+  - Pendiente en Misiones: «Accept All» no envía nada y la pestaña Daily sale vacía. Las de evento salen sin progreso.
+  - La Tienda se queda en «Now Loading…»: igual que el + de gemas, el juego espera a Google Play Billing (`queryProductDetailsAsync` nunca responde) y no llega a pedir `shopitemlist`. No es del servidor.
 - **Instalación local en Windows** (rama `instalacion-windows-mumu`): `scripts/konofan/setup-wsl.sh`, `scripts/konofan/mirror-assets.sh` y la guía [docs/konofan/INSTALAR-WINDOWS-MUMU.md](docs/konofan/INSTALAR-WINDOWS-MUMU.md). Probado de punta a punta en Ubuntu 24.04 (PostgreSQL 16, nginx, TLS), sin el juego.
 
 ## Qué falta
@@ -102,7 +109,7 @@ Fase 3–4 (redirigir el cliente y servidor mínimo). El 2026-11-12 quedó monta
 | 4 | Help de Branch en blanco | Igual que el 3 | **Arreglado** con el 3 |
 | 5 | El «+» de gemas se queda cargando | No llega ninguna petición al servidor: el cliente espera a Google Play Billing, que en MuMu no responde | Baja prioridad: en local las gemas se dan por regalos o panel |
 
-Otros stubs vistos en el registro: misiones (`mission_list`, `mission_home`), trabajos/expediciones (`expedition_set`), mini eventos sorpresa, recompensas por anuncios, invitaciones multijugador, vincular cuenta (`idlink_confirm_google`), intercambio (`exchange`) y propuesta de equipo (`party_offer`).
+Otros stubs vistos en el registro: misiones (`mission_home`; `mission_list` ya es real), trabajos/expediciones (`expedition_set`), mini eventos sorpresa, recompensas por anuncios, invitaciones multijugador, vincular cuenta (`idlink_confirm_google`), intercambio (`exchange`) y propuesta de equipo (`party_offer`).
 
 ## Decisiones tomadas
 
